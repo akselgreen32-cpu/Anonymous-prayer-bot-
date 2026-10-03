@@ -74,105 +74,69 @@ fernet = Fernet(base64.urlsafe_b64encode(hashlib.sha256(JOURNAL_SECRET.encode())
 
 
 # ---------------------------------------------------------------------------
-# Bible verses — World English Bible (WEB), public domain
-# Please double-check the wording against your preferred Bible.
+# Bible verses live in verses.json (next to this file), not in the code.
+# Each entry looks like this:
+#   {"ref": "Psalm 23:1", "ref_am": "መዝሙር 23:1",
+#    "en": "English text", "am": "Amharic text", "feelings": ["anxious", "afraid"]}
+# To add a verse, add one more entry to verses.json. Nothing here needs to change.
+# English text: World English Bible (WEB), public domain.
+# Amharic credit (shown under Amharic verses): set AMHARIC_BIBLE_CREDIT.
 # ---------------------------------------------------------------------------
-VERSES = [
-    ("Psalm 34:18", "The LORD is near to those who have a broken heart, and saves those who have a crushed spirit."),
-    ("Philippians 4:6-7", "In nothing be anxious, but in everything, by prayer and petition with thanksgiving, let your requests be made known to God. And the peace of God, which surpasses all understanding, will guard your hearts and your thoughts in Christ Jesus."),
-    ("Matthew 11:28-30", "Come to me, all you who labor and are heavily burdened, and I will give you rest. Take my yoke upon you and learn from me, for I am gentle and lowly in heart; and you will find rest for your souls. For my yoke is easy, and my burden is light."),
-    ("Isaiah 41:10", "Don't be afraid, for I am with you. Don't be dismayed, for I am your God. I will strengthen you."),
-    ("Jeremiah 29:11", "For I know the thoughts that I think toward you, says the LORD, thoughts of peace, and not of evil, to give you hope and a future."),
-    ("Psalm 23:1", "The LORD is my shepherd; I shall lack nothing."),
-    ("Romans 8:28", "We know that all things work together for good for those who love God."),
-    ("Psalm 46:1", "God is our refuge and strength, a very present help in trouble."),
-    ("John 14:27", "Peace I leave with you. My peace I give to you; not as the world gives, give I to you. Don't let your heart be troubled, neither let it be fearful."),
-    ("Psalm 55:22", "Cast your burden on the LORD, and he will sustain you."),
-    ("Isaiah 40:31", "But those who wait for the LORD will renew their strength. They will mount up with wings like eagles."),
-    ("Matthew 6:34", "Therefore don't be anxious for tomorrow, for tomorrow will be anxious for itself."),
-    ("2 Corinthians 12:9", "My grace is sufficient for you, for my power is made perfect in weakness."),
-    ("Psalm 34:17", "The righteous cry, and the LORD hears, and delivers them out of all their troubles."),
-    ("Psalm 27:1", "The LORD is my light and my salvation. Whom shall I fear?"),
-    ("Proverbs 3:5-6", "Trust in the LORD with all your heart, and don't lean on your own understanding."),
-    ("Psalm 30:5", "Weeping may stay for the night, but joy comes in the morning."),
-    ("Matthew 7:7", "Ask, and it will be given you. Seek, and you will find. Knock, and it will be opened for you."),
-    ("Psalm 147:3", "He heals the broken in heart, and binds up their wounds."),
-    ("James 1:5", "If any of you lacks wisdom, let him ask of God, who gives to all liberally and without reproach."),
-    ("Deuteronomy 31:6", "Be strong and courageous. Don't be afraid... for the LORD your God himself goes with you."),
-    ("1 Peter 5:7", "Casting all your worries on him, because he cares for you."),
-    ("Lamentations 3:22-23", "It is because of the LORD's loving kindnesses that we are not consumed... They are new every morning."),
-    ("Zephaniah 3:17", "The LORD, your God, is among you, a mighty one who will save. He will rejoice over you with joy."),
-    ("Matthew 5:4", "Blessed are those who mourn, for they shall be comforted."),
-    ("Matthew 28:20", "Behold, I am with you always, even to the end of the age."),
-    ("1 John 1:9", "If we confess our sins, he is faithful and righteous to forgive us the sins and to cleanse us from all unrighteousness."),
-    ("Romans 8:1", "There is therefore now no condemnation to those who are in Christ Jesus."),
-    ("Psalm 103:12", "As far as the east is from the west, so far has he removed our transgressions from us."),
-    ("Psalm 32:8", "I will instruct you and teach you in the way which you shall go. I will counsel you with my eye on you."),
-    ("Psalm 119:105", "Your word is a lamp to my feet, and a light for my path."),
-    ("Psalm 107:1", "Give thanks to the LORD, for he is good, for his loving kindness endures forever."),
-    ("1 Thessalonians 5:16-18", "Always rejoice. Pray without ceasing. In everything give thanks, for this is the will of God in Christ Jesus toward you."),
-    ("Psalm 118:24", "This is the day that the LORD has made. We will rejoice and be glad in it!"),
-]  # fmt: skip
-VERSE_TEXT = dict(VERSES)
-
-# Verses offered for each feeling ("Scripture for me").
+# Feelings offered under "Scripture for me". A verse is shown for a feeling when
+# that feeling is listed in the verse's "feelings" in verses.json.
 FEELINGS = ["anxious", "tired", "afraid", "sad", "lonely", "guilty", "lost", "thankful"]
-FEELING_REFS = {
-    "anxious": ["Philippians 4:6-7", "1 Peter 5:7", "Matthew 6:34", "Psalm 55:22"],
-    "tired": ["Matthew 11:28-30", "Isaiah 40:31", "2 Corinthians 12:9", "Psalm 46:1"],
-    "afraid": ["Isaiah 41:10", "Psalm 27:1", "Deuteronomy 31:6", "John 14:27", "Psalm 46:1"],
-    "sad": ["Psalm 34:18", "Psalm 147:3", "Psalm 30:5", "Matthew 5:4"],
-    "lonely": ["Deuteronomy 31:6", "Zephaniah 3:17", "Matthew 28:20", "Isaiah 41:10"],
-    "guilty": ["1 John 1:9", "Romans 8:1", "Psalm 103:12", "Lamentations 3:22-23"],
-    "lost": ["Proverbs 3:5-6", "James 1:5", "Psalm 32:8", "Psalm 119:105", "Jeremiah 29:11"],
-    "thankful": ["Psalm 107:1", "1 Thessalonians 5:16-18", "Psalm 118:24"],
-}  # fmt: skip
-
-BOOKS_AM = {
-    "Psalm": "መዝሙር", "Philippians": "ፊልጵስዩስ", "Matthew": "ማቴዎስ", "Isaiah": "ኢሳይያስ",
-    "Jeremiah": "ኤርምያስ", "Romans": "ሮሜ", "John": "ዮሐንስ", "2 Corinthians": "2ኛ ቆሮንቶስ",
-    "Proverbs": "ምሳሌ", "James": "ያዕቆብ", "Deuteronomy": "ዘዳግም", "1 Peter": "1ኛ ጴጥሮስ",
-    "Lamentations": "ሰቆቃወ ኤርምያስ", "Zephaniah": "ሶፎንያስ", "1 John": "1ኛ ዮሐንስ",
-    "1 Thessalonians": "1ኛ ተሰሎንቄ",
-}  # fmt: skip
 
 
-def _load_verses_am() -> dict:
-    """Amharic verse text lives in verses_am.json next to this file:
-    {"Psalm 23:1": "...", ...}. Empty or missing entries fall back to English."""
-    path = Path(__file__).with_name("verses_am.json")
-    if not path.exists():
-        return {}
+def _load_verses() -> list:
+    path = Path(__file__).with_name("verses.json")
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        logging.exception("Could not read verses_am.json")
-        return {}
-    return {k: v.strip() for k, v in data.items() if isinstance(v, str) and v.strip()}
+    except Exception as e:
+        raise RuntimeError(f"Could not read verses.json (it must sit next to this file): {e}") from e
+    verses = []
+    for item in data:
+        ref = str(item.get("ref", "")).strip()
+        en = str(item.get("en", "")).strip()
+        if not ref or not en:
+            logging.warning("Skipping a verse with no ref or no English text: %r", item)
+            continue
+        verses.append(
+            {
+                "ref": ref,
+                "ref_am": str(item.get("ref_am", "")).strip(),
+                "en": en,
+                "am": str(item.get("am", "")).strip(),
+                "feelings": [f for f in item.get("feelings", []) if f in FEELINGS],
+            }
+        )
+    if not verses:
+        raise RuntimeError("verses.json has no usable verses.")
+    return verses
 
 
-VERSES_AM = _load_verses_am()
+VERSES = _load_verses()
+# Verses for each feeling (if none are tagged for a feeling, any verse is used).
+FEELING_REFS = {f: [v for v in VERSES if f in v["feelings"]] or VERSES for f in FEELINGS}
 
 
-def verse_block(lang: str, ref: str) -> str:
-    am_text = VERSES_AM.get(ref) if lang == "am" else None
-    if am_text:
-        book, _, chapter_verse = ref.rpartition(" ")
-        block = f'✨ {BOOKS_AM.get(book, book)} {chapter_verse}\n"{am_text}"'
+def verse_block(lang: str, verse: dict) -> str:
+    """Amharic users get the Amharic text when the verse has it, otherwise English."""
+    if lang == "am" and verse["am"]:
+        block = f'✨ {verse["ref_am"] or verse["ref"]}\n"{verse["am"]}"'
         if AMHARIC_BIBLE_CREDIT:
             block += f"\n— {AMHARIC_BIBLE_CREDIT}"
         return block
-    return f'✨ {ref}\n"{VERSE_TEXT[ref]}"'
+    return f'✨ {verse["ref"]}\n"{verse["en"]}"'
 
 
 def random_verse(lang: str) -> str:
-    return verse_block(lang, random.choice(VERSES)[0])
+    return verse_block(lang, random.choice(VERSES))
 
 
 def daily_verse(lang: str) -> str:
     """Same verse for everyone on a given day, rotating through the list."""
     index = datetime.now(EAT).date().toordinal() % len(VERSES)
-    return verse_block(lang, VERSES[index][0])
+    return verse_block(lang, VERSES[index])
 
 
 # ---------------------------------------------------------------------------
