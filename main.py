@@ -1,6 +1,7 @@
 import os
 import re
 import json
+import time
 import hmac
 import base64
 import hashlib
@@ -28,7 +29,7 @@ from telegram import (
     ReplyParameters,
     Update,
 )
-from telegram.error import BadRequest, Forbidden, TelegramError
+from telegram.error import BadRequest, Forbidden, RetryAfter, TelegramError
 from telegram.ext import (
     ApplicationBuilder,
     CallbackQueryHandler,
@@ -55,7 +56,7 @@ RECIPIENT_IDS = [int(i) for i in os.environ["MY_USER_ID"].split(",") if i.strip(
 # The ultimate admin. Defaults to the first ID in MY_USER_ID.
 OWNER_ID = int(os.environ.get("OWNER_ID") or RECIPIENT_IDS[0])
 PORT = int(os.environ.get("PORT", 8080))
-# Shown under Amharic verses (see verses_am.json). Leave empty for none.
+# Shown under Amharic verses. Leave empty for none.
 AMHARIC_BIBLE_CREDIT = os.environ.get("AMHARIC_BIBLE_CREDIT", "")
 
 WEBHOOK_URL = (
@@ -66,6 +67,9 @@ if not WEBHOOK_URL:
 
 COOLDOWN_SECONDS = 15
 MAX_TEXT = 3500
+STATE_TTL_MINUTES = 30  # "waiting for text" states are ignored after this long
+ADMIN_PENDING_HOURS = 48  # a pending admin @username can be claimed for this long
+DEVELOPER_URL = "https://t.me/akseling"
 EAT = timezone(timedelta(hours=3))  # Ethiopia (East Africa Time), no daylight saving
 DAILY_TIME_UTC = dtime(hour=3, minute=30, tzinfo=timezone.utc)  # 06:30 EAT
 WEEKLY_TIME_UTC = dtime(hour=15, minute=0, tzinfo=timezone.utc)  # Sunday 18:00 EAT
@@ -82,8 +86,6 @@ fernet = Fernet(base64.urlsafe_b64encode(hashlib.sha256(JOURNAL_SECRET.encode())
 # English text: World English Bible (WEB), public domain.
 # Amharic credit (shown under Amharic verses): set AMHARIC_BIBLE_CREDIT.
 # ---------------------------------------------------------------------------
-# Feelings offered under "Scripture for me". A verse is shown for a feeling when
-# that feeling is listed in the verse's "feelings" in verses.json.
 FEELINGS = ["anxious", "tired", "afraid", "sad", "lonely", "guilty", "lost", "thankful"]
 
 
@@ -153,6 +155,13 @@ TEXTS = {
             "private prayer journal, and set reminders.\n\nChoose an option below:"
         ),
         "home": "🙏 Anonymous Prayer bot\n\nChoose an option:",
+        "help": (
+            "ℹ️ About this bot\n\n"
+            "Anonymous Prayer bot lets you share a prayer request without revealing who "
+            "you are, so someone can pray for you. You can also find Scripture for how "
+            "you feel, keep a private prayer journal, and set gentle reminders.\n\n"
+            "Tap 🏠 Menu to begin, or contact the developer if you need help."
+        ),
         "request_prompt": "✍️ Send me your prayer request now: text, a photo, a voice message, a video or a file.",
         "ask_category": "📂 What is your request about? Choose a category:",
         "preview": (
@@ -160,6 +169,7 @@ TEXTS = {
             "anonymously with the prayer team. Send it?"
         ),
         "cancelled": "Cancelled. Nothing was sent.",
+        "sent_short": "✅ Sent anonymously.",
         "sent": (
             "Thank you for sharing your prayer request. It has been shared "
             "anonymously so someone can pray for you. 🙏\n\n{verse}"
@@ -208,6 +218,9 @@ TEXTS = {
             "Reflect:\n• What did you see God doing in your life this week?\n"
             "• What are you carrying into next week?\n\n{verse}"
         ),
+        # prayer request header (what the prayer team sees)
+        "req_header": "🙏 New prayer request · #{code}\n📂 {category}\n🕒 {time}",
+        "b_block_sender": "🚫 Block sender",
         # buttons
         "b_send": "🙏 Send a prayer request",
         "b_scripture": "📖 Scripture for me",
@@ -215,6 +228,8 @@ TEXTS = {
         "b_reminders": "🔔 Reminders",
         "b_language": "🌍 Language",
         "b_lords": "✝️ Lord's Prayer",
+        "b_help": "ℹ️ Help",
+        "b_contact": "💬 Contact developer",
         "b_admin": "🔧 Admin",
         "b_menu": "🏠 Menu",
         "b_confirm_send": "✅ Send anonymously",
@@ -242,6 +257,75 @@ TEXTS = {
         "b_write_reflection": "✍️ Write a reflection",
         "b_open_journal": "📓 Open journal",
         "b_open_entry": "📄 Open entry",
+        # ---- admin panel ----
+        "adm_panel": "🔧 Admin panel\n\nYou are: {role}",
+        "role_owner": "Owner (full control)",
+        "role_admin": "Admin",
+        "b_stats": "📊 Stats",
+        "b_blocked": "🚫 Blocked senders",
+        "b_block_code": "🚫 Block a code",
+        "b_admins": "👥 Admins",
+        "b_broadcast": "📢 Message all users",
+        "b_unblock": "✅ Unblock #{code}",
+        "b_remove_admin": "❌ Remove @{u}",
+        "b_add_admin": "➕ Add admin",
+        "admins_only": "Admins only.",
+        "owner_only": "Only the owner can do this.",
+        "no_blocked": "No blocked senders.",
+        "blocked_list": "🚫 Blocked senders:\n{items}",
+        "blocked_note": "\n\nOnly the owner can unblock.",
+        "block_prompt": "Send the sender code to block (the #CODE on a request).",
+        "bad_code": "That doesn't look like a sender code. It's 8 to 12 characters, like #A1B2C3D4E5F6.",
+        "blocked_ok": "🚫 Blocked #{code}",
+        "unblocked_ok": "✅ Unblocked #{code}",
+        "code_missing": "No sender found with code #{code}.",
+        "none_yet": "none yet",
+        "stats": (
+            "📊 Stats\n\n"
+            "Requests: today {today} · last 7 days {week} · total {total}\n\n"
+            "By category: {cats}\nBy type: {kinds}\n\n"
+            "Users: {users} · Amharic {u_am} · English {u_en} · blocked {blocked}\n"
+            "Daily verse subscribers: {sub} · weekly reflection: {weekly}\n"
+            "Journal entries (count only): {journal}"
+        ),
+        "admins_head": "👥 Admins\n\n👑 Owner\n⚙️ {n} team member(s) from server settings",
+        "status_active": "active",
+        "status_pending": "pending (must open the bot and send /start within {h}h)",
+        "admin_add_prompt": "Send the Telegram @username of the new admin.\n\nThey will also receive the prayer requests.",
+        "add_bad": "That doesn't look like a Telegram @username (5-32 letters, numbers or _).",
+        "add_dup": "@{u} is already an admin.",
+        "add_active": "✅ @{u} is now an admin. They have been notified.",
+        "add_pending": (
+            "✅ Added @{u}. They have 48 hours to open this bot and send /start. They "
+            "become active then, and you'll get a message. Only add people who can do "
+            "this right away."
+        ),
+        "admin_now": (
+            "🔧 You are now an admin of this bot. Open 🏠 Menu → 🔧 Admin. "
+            "You will also receive the prayer requests."
+        ),
+        "owner_notice": "✅ @{u} is now an active admin.",
+        "removed": "Removed @{u}.",
+        "not_admin": "@{u} is not in the admin list.",
+        "usage_block": "Usage: /block CODE",
+        "usage_unblock": "Usage: /unblock CODE",
+        "usage_addadmin": "Usage: /addadmin @username",
+        "usage_removeadmin": "Usage: /removeadmin @username",
+        # ---- announcements (owner only) ----
+        "bc_prompt": (
+            "📢 Send the message you want to announce. It can be text, a photo, a video, "
+            "a voice message or a file.\n\nYou'll choose who receives it next."
+        ),
+        "bc_choose": "Who should receive this message?",
+        "b_bc_all": "👥 All users ({n})",
+        "b_bc_subs": "🌅 Daily verse subscribers ({n})",
+        "aud_all": "all users",
+        "aud_subs": "daily verse subscribers",
+        "bc_confirm": "Send the message above to {n} people ({audience})? This can't be undone.",
+        "b_bc_yes": "✅ Yes, send now",
+        "bc_started": "📤 Sending to {n} people… I'll tell you when it's done.",
+        "bc_done": "✅ Announcement finished.\nDelivered: {ok}\nFailed: {failed}",
+        "bc_expired": "I couldn't find that message. Start again from 📢.",
     },
     "am": {
         "welcome": (
@@ -251,6 +335,13 @@ TEXTS = {
             "የጥሞና ግዜ ማንቂያ ማዘጋጀት ይችላሉ።\n\nከታች ይምረጡ፦"
         ),
         "home": "🙏 Anonymous Prayer bot\n\nአንድ አማራጭ ይምረጡ፦",
+        "help": (
+            "ℹ️ ስለዚህ ቦት\n\n"
+            "Anonymous Prayer bot ማንነትዎ ሳይታወቅ የጸሎት ጥያቄ እንዲያካፍሉ ያስችልዎታል፤ ሌላ ሰውም "
+            "ስለእርስዎ ይጸልያል። እንዲሁም ለሚሰማዎት ስሜት የሚሆን ጥቅስ ማግኘት፣ የግል የጸሎት ማስታወሻ "
+            "መያዝ እና ማንቂያ ማዘጋጀት ይችላሉ።\n\n"
+            "ለመጀመር 🏠 ዋና ማውጫን ይንኩ፤ እርዳታ ካስፈለግዎ ገንቢውን ያነጋግሩ።"
+        ),
         "request_prompt": "✍️ የጸሎት ጥያቄዎን አሁን ይላኩልኝ፦ ጽሑፍ፣ ፎቶ፣ ድምፅ፣ ቪዲዮ ወይም ፋይል።",
         "ask_category": "📂 ጥያቄዎ ስለ ምንድን ነው? ከስር ይምረጡ፦",
         "preview": (
@@ -258,6 +349,7 @@ TEXTS = {
             "ይላካል። ይላክ?"
         ),
         "cancelled": "ተሰርዟል። ምንም አልተላከም።",
+        "sent_short": "✅ ማንነትዎ ሳይታወቅ ተልኳል።",
         "sent": (
             "የጸሎት ጥያቄዎን ስላካፈሉን እናመሰግናለን። ማንነትዎ ሳይታወቅ ተላልፏል፤ "
             "አንድ ሰው ስለእርስዎ ይጸልያል። 🙏\n\n{verse}"
@@ -305,12 +397,16 @@ TEXTS = {
             "ያስቡ፦\n• በዚህ ሳምንት እግዚአብሔር በሕይወትዎ ሲሠራ ያዩት ምንድን ነው?\n"
             "• ወደ ቀጣዩ ሳምንት ምን ይዘው ይሄዳሉ?\n\n{verse}"
         ),
+        "req_header": "🙏 አዲስ የጸሎት ጥያቄ · #{code}\n📂 {category}\n🕒 {time}",
+        "b_block_sender": "🚫 ላኪውን አግድ",
         "b_send": "🙏 የጸሎት ጥያቄ ላክ",
         "b_scripture": "📖 ጥቅስ ለእኔ",
         "b_journal": "📓 የግል የጸሎት ማስታወሻ",
         "b_reminders": "🔔 የጥሞና ግዜ ማንቂያ",
         "b_language": "🌍 ቋንቋ",
         "b_lords": "✝️ የጌታ ጸሎት",
+        "b_help": "ℹ️ እገዛ",
+        "b_contact": "💬 ገንቢውን አነጋግር",
         "b_admin": "🔧 አስተዳዳሪ",
         "b_menu": "🏠 ዋና ማውጫ",
         "b_confirm_send": "✅ ላክ",
@@ -338,6 +434,74 @@ TEXTS = {
         "b_write_reflection": "✍️ ነጸብራቅ ጻፍ",
         "b_open_journal": "📓 ማስታወሻ ክፈት",
         "b_open_entry": "📄 ጽሑፉን ክፈት",
+        # ---- admin panel ----
+        "adm_panel": "🔧 የአስተዳዳሪ ማውጫ\n\nሚናዎ፦ {role}",
+        "role_owner": "ባለቤት (ሙሉ ቁጥጥር)",
+        "role_admin": "አስተዳዳሪ",
+        "b_stats": "📊 ስታቲስቲክስ",
+        "b_blocked": "🚫 የታገዱ ላኪዎች",
+        "b_block_code": "🚫 ኮድ አግድ",
+        "b_admins": "👥 አስተዳዳሪዎች",
+        "b_broadcast": "📢 ለሁሉም መልእክት ላክ",
+        "b_unblock": "✅ #{code} ፍታ",
+        "b_remove_admin": "❌ @{u} አስወግድ",
+        "b_add_admin": "➕ አስተዳዳሪ ጨምር",
+        "admins_only": "ለአስተዳዳሪዎች ብቻ።",
+        "owner_only": "ይህን ማድረግ የሚችለው ባለቤቱ ብቻ ነው።",
+        "no_blocked": "የታገዱ ላኪዎች የሉም።",
+        "blocked_list": "🚫 የታገዱ ላኪዎች፦\n{items}",
+        "blocked_note": "\n\nእገዳውን ማንሳት የሚችለው ባለቤቱ ብቻ ነው።",
+        "block_prompt": "ማገድ የሚፈልጉትን የላኪ ኮድ ይላኩ (በጥያቄው ላይ ያለው #ኮድ)።",
+        "bad_code": "ይህ የላኪ ኮድ አይመስልም። ከ8 እስከ 12 ቁምፊዎች ነው፤ ለምሳሌ #A1B2C3D4E5F6።",
+        "blocked_ok": "🚫 #{code} ታግዷል",
+        "unblocked_ok": "✅ #{code} ተፈቷል",
+        "code_missing": "በ#{code} ኮድ ላኪ አልተገኘም።",
+        "none_yet": "እስካሁን የለም",
+        "stats": (
+            "📊 ስታቲስቲክስ\n\n"
+            "የጸሎት ጥያቄዎች፦ ዛሬ {today} · ባለፉት 7 ቀናት {week} · በጠቅላላው {total}\n\n"
+            "በምድብ፦ {cats}\nበአይነት፦ {kinds}\n\n"
+            "ተጠቃሚዎች፦ {users} · አማርኛ {u_am} · እንግሊዝኛ {u_en} · የታገዱ {blocked}\n"
+            "የዕለት ጥቅስ ተመዝጋቢዎች፦ {sub} · የሳምንት ነጸብራቅ፦ {weekly}\n"
+            "የማስታወሻ ጽሑፎች (ቁጥር ብቻ)፦ {journal}"
+        ),
+        "admins_head": "👥 አስተዳዳሪዎች\n\n👑 ባለቤት\n⚙️ ከሰርቨር ቅንብር {n} የቡድን አባል(ላት)",
+        "status_active": "ንቁ",
+        "status_pending": "በመጠባበቅ ላይ (በ{h} ሰዓት ውስጥ ቦቱን ከፍቶ /start መላክ አለበት)",
+        "admin_add_prompt": "የአዲሱን አስተዳዳሪ የቴሌግራም @username ይላኩ።\n\nየጸሎት ጥያቄዎችንም ይቀበላል።",
+        "add_bad": "ይህ የቴሌግራም @username አይመስልም (ከ5-32 ፊደላት፣ ቁጥሮች ወይም _)።",
+        "add_dup": "@{u} አስቀድሞ አስተዳዳሪ ነው።",
+        "add_active": "✅ @{u} አሁን አስተዳዳሪ ሆኗል፤ ማሳወቂያ ደርሶታል።",
+        "add_pending": (
+            "✅ @{u} ተጨምሯል። በ48 ሰዓት ውስጥ ይህን ቦት ከፍቶ /start መላክ አለበት። ሲልክ ንቁ ይሆናል፤ "
+            "እርስዎም መልእክት ይደርስዎታል። ወዲያውኑ ይህን ማድረግ የሚችሉ ሰዎችን ብቻ ይጨምሩ።"
+        ),
+        "admin_now": (
+            "🔧 አሁን የዚህ ቦት አስተዳዳሪ ሆነዋል። 🏠 ዋና ማውጫ → 🔧 አስተዳዳሪ ይክፈቱ። "
+            "የጸሎት ጥያቄዎችንም ይቀበላሉ።"
+        ),
+        "owner_notice": "✅ @{u} አሁን ንቁ አስተዳዳሪ ነው።",
+        "removed": "@{u} ተወግዷል።",
+        "not_admin": "@{u} በአስተዳዳሪዎች ዝርዝር ውስጥ የለም።",
+        "usage_block": "አጠቃቀም፦ /block CODE",
+        "usage_unblock": "አጠቃቀም፦ /unblock CODE",
+        "usage_addadmin": "አጠቃቀም፦ /addadmin @username",
+        "usage_removeadmin": "አጠቃቀም፦ /removeadmin @username",
+        # ---- announcements (owner only) ----
+        "bc_prompt": (
+            "📢 ማሳወቅ የሚፈልጉትን መልእክት ይላኩ። ጽሑፍ፣ ፎቶ፣ ቪዲዮ፣ ድምፅ ወይም ፋይል ሊሆን ይችላል።\n\n"
+            "ቀጥሎ ተቀባዮችን ይመርጣሉ።"
+        ),
+        "bc_choose": "መልእክቱ ለማን ይላክ?",
+        "b_bc_all": "👥 ለሁሉም ተጠቃሚዎች ({n})",
+        "b_bc_subs": "🌅 ለዕለት ጥቅስ ተመዝጋቢዎች ({n})",
+        "aud_all": "ሁሉም ተጠቃሚዎች",
+        "aud_subs": "የዕለት ጥቅስ ተመዝጋቢዎች",
+        "bc_confirm": "ከላይ ያለውን መልእክት ለ{n} ሰዎች ({audience}) ይላክ? ከተላከ መመለስ አይቻልም።",
+        "b_bc_yes": "✅ አዎ፣ አሁን ላክ",
+        "bc_started": "📤 ለ{n} ሰዎች በመላክ ላይ ነው… ሲጠናቀቅ አሳውቅዎታለሁ።",
+        "bc_done": "✅ ማስታወቂያው ተጠናቋል።\nደርሷል፦ {ok}\nአልደረሰም፦ {failed}",
+        "bc_expired": "ይህን መልእክት ማግኘት አልቻልኩም። ከ📢 እንደገና ይጀምሩ።",
     },
 }
 
@@ -473,7 +637,10 @@ CREATE TABLE IF NOT EXISTS users (
 );
 ALTER TABLE users ADD COLUMN IF NOT EXISTS weekly BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS state TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS state_at TIMESTAMPTZ;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS uname_hash TEXT;
 CREATE INDEX IF NOT EXISTS users_anon_code_idx ON users (anon_code);
+CREATE INDEX IF NOT EXISTS users_uname_idx ON users (uname_hash);
 CREATE TABLE IF NOT EXISTS requests (
     id         BIGSERIAL PRIMARY KEY,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -521,9 +688,18 @@ async def db(method: str, query: str, *args):
 
 def anon_code(user_id: int) -> str:
     """Stable anonymous ID shown to the prayer team so a spammer can be
-    blocked without anyone seeing who they are."""
+    blocked without anyone seeing who they are. 12 hex characters, so two
+    people sharing a code is practically impossible. (Older users keep their
+    original 8-character codes, which still work.)"""
     digest = hmac.new(BOT_TOKEN.encode(), str(user_id).encode(), hashlib.sha256)
-    return digest.hexdigest()[:8].upper()
+    return digest.hexdigest()[:12].upper()
+
+
+def uname_hash(username: str) -> str:
+    """We never store Telegram @usernames of ordinary users. Only a keyed hash,
+    which lets the owner promote someone who already started the bot."""
+    digest = hmac.new(BOT_TOKEN.encode(), b"uname:" + username.lower().encode(), hashlib.sha256)
+    return digest.hexdigest()
 
 
 def encrypt(text: str) -> str:
@@ -537,46 +713,73 @@ def decrypt(token: str) -> str:
         return "⚠️ (this entry can't be decrypted)"
 
 
+async def purge_expired_admins():
+    """Pending admin @usernames that nobody claimed in time are deleted, so a
+    released or changed username can never be claimed by a stranger later."""
+    await db(
+        "execute",
+        "DELETE FROM admins WHERE user_id IS NULL "
+        "AND created_at <= now() - make_interval(hours => $1)",
+        ADMIN_PENDING_HOURS,
+    )
+
+
+async def user_lang(user_id: int) -> str:
+    return (await db("fetchval", "SELECT lang FROM users WHERE user_id = $1", user_id)) or "en"
+
+
 async def get_user(tg_user):
     """Create/fetch the user row. Also links a pending admin @username to this
-    person the first time they talk to the bot."""
+    person the first time they talk to the bot (only while it hasn't expired).
+    A 'waiting for text' state older than STATE_TTL_MINUTES is ignored."""
     row = await db(
         "fetchrow",
-        """
-        INSERT INTO users (user_id, anon_code) VALUES ($1, $2)
-        ON CONFLICT (user_id) DO UPDATE SET user_id = EXCLUDED.user_id
-        RETURNING lang, blocked, subscribed, weekly, state, anon_code
+        f"""
+        INSERT INTO users (user_id, anon_code, uname_hash) VALUES ($1, $2, $3)
+        ON CONFLICT (user_id) DO UPDATE SET uname_hash = EXCLUDED.uname_hash
+        RETURNING lang, blocked, subscribed, weekly, anon_code,
+                  CASE WHEN state_at IS NOT NULL
+                            AND state_at > now() - interval '{STATE_TTL_MINUTES} minutes'
+                       THEN state END AS state
         """,
         tg_user.id,
         anon_code(tg_user.id),
+        uname_hash(tg_user.username) if tg_user.username else None,
     )
     if tg_user.username:
         claimed = await db(
             "fetchrow",
             """
             UPDATE admins SET user_id = $1
-            WHERE user_id IS NULL AND username = $2 RETURNING username
+            WHERE user_id IS NULL AND username = $2
+              AND created_at > now() - make_interval(hours => $3)
+            RETURNING username
             """,
             tg_user.id,
             tg_user.username.lower(),
+            ADMIN_PENDING_HOURS,
         )
         if claimed and _bot is not None:
-            await _notify_new_admin(tg_user)
+            await _notify_admin_promoted(tg_user.id, row["lang"] or "en")
+            await _notify_owner_admin_active(tg_user.username)
     return row
 
 
-async def _notify_new_admin(tg_user):
+async def _notify_admin_promoted(user_id: int, lang: str):
     try:
-        await _bot.send_message(
-            chat_id=tg_user.id,
-            text="🔧 You are now an admin of this bot. Open 🏠 Menu → 🔧 Admin. "
-            "You will also receive the prayer requests.",
-        )
-        await _bot.send_message(
-            chat_id=OWNER_ID, text=f"✅ @{tg_user.username} is now an active admin."
-        )
+        await _bot.send_message(chat_id=user_id, text=t(lang, "admin_now"))
     except TelegramError as e:
         logging.warning("Admin notification failed: %s", e)
+
+
+async def _notify_owner_admin_active(username: str):
+    try:
+        owner_lang = await user_lang(OWNER_ID)
+        await _bot.send_message(
+            chat_id=OWNER_ID, text=t(owner_lang, "owner_notice", u=username)
+        )
+    except TelegramError as e:
+        logging.warning("Owner notification failed: %s", e)
 
 
 async def is_admin(user_id: int) -> bool:
@@ -596,7 +799,12 @@ async def recipient_ids() -> list[int]:
 
 
 async def set_state(user_id: int, state: str | None):
-    await db("execute", "UPDATE users SET state = $2 WHERE user_id = $1", user_id, state)
+    await db(
+        "execute",
+        "UPDATE users SET state = $2, state_at = now() WHERE user_id = $1",
+        user_id,
+        state,
+    )
 
 
 async def start_request_if_allowed(user_id: int) -> bool:
@@ -629,7 +837,14 @@ def kb(*rows) -> InlineKeyboardMarkup:
 
 
 def menu_row(lang: str):
+    """Menu button that EDITS the current message into the menu."""
     return [btn(t(lang, "b_menu"), "m:home")]
+
+
+def menu_row_new(lang: str):
+    """Menu button for chat-style messages: keeps the message (verse, prayer...)
+    in the chat and sends the menu as a NEW message."""
+    return [btn(t(lang, "b_menu"), "m:homenew")]
 
 
 def menu_keyboard(lang: str, admin: bool) -> InlineKeyboardMarkup:
@@ -637,15 +852,24 @@ def menu_keyboard(lang: str, admin: bool) -> InlineKeyboardMarkup:
         [btn(t(lang, "b_send"), "m:request")],
         [btn(t(lang, "b_scripture"), "m:scripture"), btn(t(lang, "b_journal"), "j:home")],
         [btn(t(lang, "b_reminders"), "m:reminders"), btn(t(lang, "b_language"), "m:language")],
-        [btn(t(lang, "b_lords"), "m:lords")],
+        [btn(t(lang, "b_lords"), "m:lords"), btn(t(lang, "b_help"), "m:help")],
     ]
     if admin:
         rows.append([btn(t(lang, "b_admin"), "adm:home")])
     return InlineKeyboardMarkup(rows)
 
 
+def help_keyboard(lang: str, new_message: bool) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton(t(lang, "b_contact"), url=DEVELOPER_URL)],
+            menu_row_new(lang) if new_message else menu_row(lang),
+        ]
+    )
+
+
 def language_keyboard() -> InlineKeyboardMarkup:
-    return kb([btn("English", "lang:en"), btn("አማርኛ", "lang:am")])
+    return kb([btn("🇺🇸 English", "lang:en"), btn("🇪🇹 አማርኛ", "lang:am")])
 
 
 def category_keyboard(lang: str) -> InlineKeyboardMarkup:
@@ -667,6 +891,16 @@ async def show(query, text: str, markup=None):
     except BadRequest as e:
         if "not modified" not in str(e).lower():
             raise
+
+
+async def drop_buttons(query) -> bool:
+    """Remove the buttons from the tapped message. False if that fails
+    (for example a double tap, when the buttons are already gone)."""
+    try:
+        await query.edit_message_reply_markup(reply_markup=None)
+        return True
+    except TelegramError:
+        return False
 
 
 def detect_kind(m: Message) -> str:
@@ -691,24 +925,43 @@ def remind_datetime(days: int) -> datetime:
     return target.replace(hour=6, minute=30, second=0, microsecond=0)
 
 
-async def deliver(context, from_chat_id: int, message_id: int, header: str, code: str) -> int:
-    """Send the header (with a Block button) and a copy of the message to every
-    team member. copy_message does not reveal the sender. One failing
-    recipient does not stop the others. Returns how many got it."""
+async def deliver(context, from_chat_id: int, message_ids: list[int], category: str, code: str) -> int:
+    """Send a header (in the recipient's own language, with a Block button) and
+    a copy of the message(s) to every team member. copy_message does not reveal
+    the sender. protect_content stops team members from forwarding or saving the
+    request, so private cases stay private. One failing recipient does not stop
+    the others. Returns how many got it."""
+    ids = await recipient_ids()
+    rows = await db(
+        "fetch", "SELECT user_id, lang FROM users WHERE user_id = ANY($1::bigint[])", ids
+    )
+    langs = {r["user_id"]: r["lang"] for r in rows}
+    now = datetime.now(EAT)
     delivered = 0
-    for recipient_id in await recipient_ids():
+    for recipient_id in ids:
+        lang = langs.get(recipient_id) or "en"
+        header = t(
+            lang,
+            "req_header",
+            code=code,
+            category=CATEGORY_LABELS[lang][category],
+            time=format_time(now, lang),
+        )
         try:
             head = await context.bot.send_message(
                 chat_id=recipient_id,
                 text=header,
-                reply_markup=kb([btn("🚫 Block sender", f"blk:{code}")]),
+                reply_markup=kb([btn(t(lang, "b_block_sender"), f"blk:{code}")]),
+                protect_content=True,
             )
-            await context.bot.copy_message(
-                chat_id=recipient_id,
-                from_chat_id=from_chat_id,
-                message_id=message_id,
-                reply_parameters=ReplyParameters(message_id=head.message_id),
-            )
+            for mid in message_ids:
+                await context.bot.copy_message(
+                    chat_id=recipient_id,
+                    from_chat_id=from_chat_id,
+                    message_id=mid,
+                    protect_content=True,
+                    reply_parameters=ReplyParameters(message_id=head.message_id),
+                )
             delivered += 1
         except TelegramError as e:
             logging.warning("Could not deliver to %s: %s", recipient_id, e)
@@ -716,7 +969,7 @@ async def deliver(context, from_chat_id: int, message_id: int, header: str, code
 
 
 # ---------------------------------------------------------------------------
-# Start, menu, language
+# Start, menu, help, language
 # ---------------------------------------------------------------------------
 async def handle_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = await get_user(update.effective_user)
@@ -740,6 +993,14 @@ async def handle_menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE
     )
 
 
+async def handle_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/help: a short description of the bot and a way to reach the developer."""
+    user = await get_user(update.effective_user)
+    await set_state(update.effective_user.id, None)
+    lang = user["lang"] or "en"
+    await update.message.reply_text(t(lang, "help"), reply_markup=help_keyboard(lang, True))
+
+
 async def handle_lang_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     lang = query.data.split(":", 1)[1]
@@ -760,44 +1021,67 @@ async def handle_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     action = query.data.split(":", 1)[1]
     await query.answer()
     user = await get_user(query.from_user)
-    await set_state(query.from_user.id, None)
+    uid = query.from_user.id
+    await set_state(uid, None)
     lang = user["lang"] or "en"
 
     if action == "home":
-        await show(
-            query, t(lang, "home"), menu_keyboard(lang, await is_admin(query.from_user.id))
-        )
+        await show(query, t(lang, "home"), menu_keyboard(lang, await is_admin(uid)))
+    elif action == "homenew":
+        # The message the button was on (a verse, a prayer...) stays in the chat.
+        if await drop_buttons(query):
+            await context.bot.send_message(
+                chat_id=uid,
+                text=t(lang, "home"),
+                reply_markup=menu_keyboard(lang, await is_admin(uid)),
+            )
     elif action == "request":
         await show(query, t(lang, "request_prompt"), kb(menu_row(lang)))
     elif action == "scripture":
         await show(query, t(lang, "scripture_prompt"), feelings_keyboard(lang))
+    elif action == "scripture2":
+        # From a verse message: keep the verse, send the feelings list as a new message.
+        if await drop_buttons(query):
+            await context.bot.send_message(
+                chat_id=uid, text=t(lang, "scripture_prompt"), reply_markup=feelings_keyboard(lang)
+            )
     elif action == "language":
         await show(query, LANG_PROMPT, language_keyboard())
     elif action == "lords":
-        await show(query, LORDS_PRAYER_TEXT[lang], kb(menu_row(lang)))
+        # Arrives as a new message; the menu above stays as it is.
+        await context.bot.send_message(
+            chat_id=uid, text=LORDS_PRAYER_TEXT[lang], reply_markup=kb(menu_row_new(lang))
+        )
+    elif action == "help":
+        await show(query, t(lang, "help"), help_keyboard(lang, False))
     elif action == "reminders":
         await show_reminders(query, user, lang)
 
 
 # ---------------------------------------------------------------------------
-# Scripture for the moment
+# Scripture for the moment: every verse arrives as a NEW message (like a chat)
 # ---------------------------------------------------------------------------
 async def handle_feeling(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    feeling = query.data.split(":", 1)[1]
+    action, feeling = query.data.split(":", 1)  # "feel" (from the list) or "more"
     await query.answer()
     if feeling not in FEELING_REFS:
         return
     user = await get_user(query.from_user)
     lang = user["lang"] or "en"
+    if action == "more":
+        # Take the buttons off the previous verse. A double tap fails here,
+        # so one tap can never send two verses.
+        if not await drop_buttons(query):
+            return
     text = f"{FEELING_LABELS[lang][feeling]}\n\n{verse_block(lang, random.choice(FEELING_REFS[feeling]))}"
-    await show(
-        query,
-        text,
-        kb(
-            [btn(t(lang, "b_another"), f"feel:{feeling}")],
-            [btn(t(lang, "b_feelings"), "m:scripture")],
-            menu_row(lang),
+    await context.bot.send_message(
+        chat_id=query.from_user.id,
+        text=text,
+        reply_markup=kb(
+            [btn(t(lang, "b_another"), f"more:{feeling}")],
+            [btn(t(lang, "b_feelings"), "m:scripture2")],
+            menu_row_new(lang),
         ),
     )
 
@@ -843,10 +1127,29 @@ async def handle_reminder_toggle(update: Update, context: ContextTypes.DEFAULT_T
 # ---------------------------------------------------------------------------
 # Prayer requests: message -> category -> preview -> send / don't send
 # ---------------------------------------------------------------------------
+ALBUM_TTL_SECONDS = 3600
+ALBUM_MAX = 10
+
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message
     user = await get_user(update.effective_user)
     lang = user["lang"] or "en"
+
+    # Albums arrive as several separate updates. The first one drives the
+    # prompts; the others are remembered silently and sent along with it.
+    group = message.media_group_id
+    if group:
+        albums = context.bot_data.setdefault("albums", {})
+        entry = albums.get(group)
+        if entry is not None:
+            if len(entry["ids"]) < ALBUM_MAX and message.message_id not in entry["ids"]:
+                entry["ids"].append(message.message_id)
+            return
+        now = time.time()
+        for key in [k for k, v in albums.items() if now - v["ts"] > ALBUM_TTL_SECONDS]:
+            del albums[key]
+        albums[group] = {"first": message.message_id, "ids": [message.message_id], "ts": now}
 
     if user["state"]:
         await handle_state_message(update, user, lang)
@@ -888,16 +1191,12 @@ async def handle_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def handle_cancel_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # The cooldown is NOT reset here. Otherwise an old, unanswered prompt could
+    # be cancelled right after a delivered request to skip the waiting time.
     query = update.callback_query
     await query.answer()
     user = await get_user(query.from_user)
     lang = user["lang"] or "en"
-    # Nothing was sent, so don't make them wait out the cooldown.
-    await db(
-        "execute",
-        "UPDATE users SET last_request_at = NULL WHERE user_id = $1",
-        query.from_user.id,
-    )
     await show(query, t(lang, "cancelled"), kb(menu_row(lang)))
 
 
@@ -917,9 +1216,7 @@ async def handle_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Remove the buttons first. A second tap then fails here, so a request
     # can never be sent twice.
-    try:
-        await query.edit_message_reply_markup(reply_markup=None)
-    except TelegramError:
+    if not await drop_buttons(query):
         return
 
     original = getattr(query.message, "reply_to_message", None)
@@ -927,13 +1224,15 @@ async def handle_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await show(query, t(lang, "expired"), kb(menu_row(lang)))
         return
 
-    header = (
-        f"🙏 New prayer request · #{user['anon_code']}\n"
-        f"📂 {CATEGORY_LABELS['en'][category]}\n"
-        f"🕒 {format_time(datetime.now(EAT), 'en')}"
-    )
+    # An album is sent as a whole (all the photos that arrived together).
+    message_ids = [original.message_id]
+    for entry in context.bot_data.get("albums", {}).values():
+        if entry["first"] == original.message_id:
+            message_ids = list(entry["ids"])
+            break
+
     delivered = await deliver(
-        context, original.chat_id, original.message_id, header, user["anon_code"]
+        context, original.chat_id, message_ids, category, user["anon_code"]
     )
 
     if delivered:
@@ -947,8 +1246,22 @@ async def handle_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
         rows = []
         if original.text:
             rows.append([btn(t(lang, "b_save_journal"), "js")])
-        rows.append(menu_row(lang))
-        await show(query, t(lang, "sent", verse=random_verse(lang)), kb(*rows))
+        rows.append(menu_row_new(lang))
+        await show(query, t(lang, "sent_short"), None)
+        # The thank-you and the verse arrive as a new message (replying to the
+        # original so "Save to my journal" can still find it).
+        thanks = t(lang, "sent", verse=random_verse(lang))
+        try:
+            await context.bot.send_message(
+                chat_id=query.from_user.id,
+                text=thanks,
+                reply_markup=kb(*rows),
+                reply_parameters=ReplyParameters(message_id=original.message_id),
+            )
+        except TelegramError:
+            await context.bot.send_message(
+                chat_id=query.from_user.id, text=thanks, reply_markup=kb(menu_row_new(lang))
+            )
     else:
         await db(
             "execute",
@@ -971,7 +1284,7 @@ async def handle_save_request(update: Update, context: ContextTypes.DEFAULT_TYPE
     # so the entry can never be saved twice.
     try:
         await query.edit_message_reply_markup(
-            reply_markup=kb([btn(t(lang, "b_open_journal"), "j:home")], menu_row(lang))
+            reply_markup=kb([btn(t(lang, "b_open_journal"), "j:home")], menu_row_new(lang))
         )
     except TelegramError:
         await query.answer()
@@ -998,6 +1311,22 @@ async def handle_state_message(update: Update, user, lang: str):
     uid = update.effective_user.id
     state = user["state"]
 
+    # An announcement can be any kind of message, so check it before "text only".
+    if state == "admin_broadcast" and is_owner(uid):
+        await set_state(uid, None)
+        everyone = len(await audience_rows("all"))
+        subs = len(await audience_rows("subs"))
+        await message.reply_text(
+            t(lang, "bc_choose"),
+            reply_markup=kb(
+                [btn(t(lang, "b_bc_all", n=everyone), "bc:pick:all")],
+                [btn(t(lang, "b_bc_subs", n=subs), "bc:pick:subs")],
+                [btn(t(lang, "b_cancel"), "bc:cancel")],
+            ),
+            reply_parameters=ReplyParameters(message_id=message.message_id),
+        )
+        return
+
     if not message.text:
         await message.reply_text(t(lang, "need_text"))
         return
@@ -1019,11 +1348,12 @@ async def handle_state_message(update: Update, user, lang: str):
 
     elif state == "admin_add" and is_owner(uid):
         await set_state(uid, None)
-        await message.reply_text(await add_admin(uid, message.text))
+        await message.reply_text(await add_admin(uid, message.text, lang))
 
     elif state == "admin_block" and await is_admin(uid):
         await set_state(uid, None)
-        await message.reply_text(await set_blocked_by_code(message.text, True))
+        _, text = await set_blocked_by_code(message.text, True, lang)
+        await message.reply_text(text)
 
     else:
         await set_state(uid, None)
@@ -1225,11 +1555,13 @@ async def handle_journal(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ---------------------------------------------------------------------------
-# Admin: owner (ultimate admin) and admins
-#   admins: see stats, block senders, see the admin list
-#   owner : everything above + unblock, add/remove admins by @username
+# Admin: owner (ultimate admin) and admins. Everything is shown in the
+# admin's own language.
+#   admins: see stats, block senders
+#   owner : everything above + unblock, add/remove admins, announcements,
+#           and the only person who can see who the other admins are
 # ---------------------------------------------------------------------------
-async def stats_text() -> str:
+async def stats_text(lang: str) -> str:
     start_of_today = datetime.now(EAT).replace(hour=0, minute=0, second=0, microsecond=0)
     counts = await db(
         "fetchrow",
@@ -1261,92 +1593,120 @@ async def stats_text() -> str:
         """,
     )
     journal = await db("fetchval", "SELECT count(*) FROM journal")
-    lines = [
-        "📊 Stats",
-        "",
-        f"Requests: today {counts['today']} · last 7 days {counts['week']} · total {counts['total']}",
-        "",
-        "By category: "
-        + (" · ".join(f"{CATEGORY_LABELS['en'][r['category']]} {r['n']}" for r in by_category) or "none yet"),
-        "By type: " + (" · ".join(f"{r['kind']} {r['n']}" for r in by_kind) or "none yet"),
-        "",
-        f"Users: {users['total']} · Amharic {users['amharic']} · English {users['english']} · blocked {users['blocked']}",
-        f"Daily verse subscribers: {users['subscribed']} · weekly reflection: {users['weekly']}",
-        f"Journal entries (count only): {journal}",
-    ]
-    return "\n".join(lines)
+    none_yet = t(lang, "none_yet")
+    labels = CATEGORY_LABELS[lang if lang in CATEGORY_LABELS else "en"]
+    return t(
+        lang,
+        "stats",
+        today=counts["today"],
+        week=counts["week"],
+        total=counts["total"],
+        cats=" · ".join(f"{labels[r['category']]} {r['n']}" for r in by_category) or none_yet,
+        kinds=" · ".join(f"{r['kind']} {r['n']}" for r in by_kind) or none_yet,
+        users=users["total"],
+        u_am=users["amharic"],
+        u_en=users["english"],
+        blocked=users["blocked"],
+        sub=users["subscribed"],
+        weekly=users["weekly"],
+        journal=journal,
+    )
 
 
-async def set_blocked_by_code(raw: str, blocked: bool) -> str:
+async def set_blocked_by_code(raw: str, blocked: bool, lang: str) -> tuple[bool, str]:
+    """Returns (done, message). Codes are 12 characters (older ones 8)."""
     code = raw.strip().lstrip("#").upper()
-    if not re.fullmatch(r"[0-9A-F]{8}", code):
-        return "That doesn't look like a sender code. It's 8 characters, like #A1B2C3D4."
+    if not re.fullmatch(r"[0-9A-F]{8,12}", code):
+        return False, t(lang, "bad_code")
     result = await db(
         "execute", "UPDATE users SET blocked = $2 WHERE anon_code = $1", code, blocked
     )
     if int(result.split()[-1]):
-        return f"{'🚫 Blocked' if blocked else '✅ Unblocked'} #{code}"
-    return f"No sender found with code #{code}."
+        return True, t(lang, "blocked_ok" if blocked else "unblocked_ok", code=code)
+    return False, t(lang, "code_missing", code=code)
 
 
-async def add_admin(owner_id: int, raw: str) -> str:
+async def add_admin(owner_id: int, raw: str, lang: str) -> str:
+    """If the person already started the bot they become an admin immediately
+    and are notified. Otherwise a pending row is made that expires after
+    ADMIN_PENDING_HOURS."""
     username = parse_username(raw)
     if username is None:
-        return "That doesn't look like a Telegram @username (5-32 letters, numbers or _)."
+        return t(lang, "add_bad")
+    await purge_expired_admins()
+    known = await db(
+        "fetchrow",
+        "SELECT user_id, lang FROM users WHERE uname_hash = $1 ORDER BY created_at DESC LIMIT 1",
+        uname_hash(username),
+    )
     row = await db(
         "fetchrow",
-        "INSERT INTO admins (username, added_by) VALUES ($1, $2) "
+        "INSERT INTO admins (username, user_id, added_by) VALUES ($1, $2, $3) "
         "ON CONFLICT (username) DO NOTHING RETURNING id",
         username,
+        known["user_id"] if known else None,
         owner_id,
     )
     if row is None:
-        return f"@{username} is already an admin."
-    return (
-        f"✅ Added @{username}. They become active the first time they open this bot "
-        "and send /start, and you'll get a message when that happens."
-    )
+        return t(lang, "add_dup", u=username)
+    if known:
+        await _notify_admin_promoted(known["user_id"], known["lang"] or "en")
+        return t(lang, "add_active", u=username)
+    return t(lang, "add_pending", u=username)
 
 
-async def admin_home_text_and_keyboard(uid: int):
+def admin_home(uid: int, lang: str):
     rows = [
-        [btn("📊 Stats", "adm:stats"), btn("🚫 Blocked senders", "adm:blocked")],
-        [btn("🚫 Block a code", "adm:block"), btn("👥 Admins", "adm:admins")],
-        [btn("🏠 Menu", "m:home")],
+        [btn(t(lang, "b_stats"), "adm:stats"), btn(t(lang, "b_blocked"), "adm:blocked")],
+        [btn(t(lang, "b_block_code"), "adm:block")],
     ]
-    role = "Owner (full control)" if is_owner(uid) else "Admin"
-    return f"🔧 Admin panel\n\nYou are: {role}", InlineKeyboardMarkup(rows)
+    if is_owner(uid):
+        rows[1].append(btn(t(lang, "b_admins"), "adm:admins"))
+        rows.append([btn(t(lang, "b_broadcast"), "adm:bc")])
+    rows.append(menu_row(lang))
+    role = t(lang, "role_owner" if is_owner(uid) else "role_admin")
+    return t(lang, "adm_panel", role=role), InlineKeyboardMarkup(rows)
 
 
-async def render_blocked(query, uid: int):
-    back = [btn("⬅️ Back", "adm:home")]
+async def render_blocked(query, uid: int, lang: str):
+    back = [btn(t(lang, "b_back"), "adm:home")]
     rows = await db("fetch", "SELECT anon_code FROM users WHERE blocked ORDER BY anon_code LIMIT 40")
     if not rows:
-        await show(query, "No blocked senders.", kb(back))
+        await show(query, t(lang, "no_blocked"), kb(back))
         return
     buttons = (
-        [[btn(f"✅ Unblock #{r['anon_code']}", f"adm:unb:{r['anon_code']}")] for r in rows]
+        [[btn(t(lang, "b_unblock", code=r["anon_code"]), f"adm:unb:{r['anon_code']}")] for r in rows]
         if is_owner(uid)
         else []
     )
-    text = "🚫 Blocked senders:\n" + "\n".join(f"#{r['anon_code']}" for r in rows)
+    text = t(lang, "blocked_list", items="\n".join(f"#{r['anon_code']}" for r in rows))
     if not is_owner(uid):
-        text += "\n\nOnly the owner can unblock."
+        text += t(lang, "blocked_note")
     await show(query, text, InlineKeyboardMarkup(buttons + [back]))
 
 
-async def render_admins(query, uid: int):
-    back = [btn("⬅️ Back", "adm:home")]
-    rows = await db("fetch", "SELECT id, username, user_id FROM admins ORDER BY id")
-    lines = ["👥 Admins", "", "👑 Owner", f"⚙️ {len(RECIPIENT_IDS)} team member(s) from server settings"]
+async def render_admins(query, uid: int, lang: str):
+    """Owner only. Other admins never see who else is on the team, or how many."""
+    await purge_expired_admins()
+    back = [btn(t(lang, "b_back"), "adm:home")]
+    rows = await db(
+        "fetch",
+        "SELECT id, username, user_id, "
+        "GREATEST(1, CEIL(EXTRACT(EPOCH FROM (created_at + make_interval(hours => $1) - now())) / 3600))::int AS hours_left "
+        "FROM admins ORDER BY id",
+        ADMIN_PENDING_HOURS,
+    )
+    lines = [t(lang, "admins_head", n=len(RECIPIENT_IDS))]
     buttons = []
     for r in rows:
-        status = "active" if r["user_id"] else "pending (needs to open the bot and send /start)"
+        status = (
+            t(lang, "status_active")
+            if r["user_id"]
+            else t(lang, "status_pending", h=r["hours_left"])
+        )
         lines.append(f"• @{r['username']} — {status}")
-        if is_owner(uid):
-            buttons.append([btn(f"❌ Remove @{r['username']}", f"adm:rm:{r['id']}")])
-    if is_owner(uid):
-        buttons.append([btn("➕ Add admin", "adm:add")])
+        buttons.append([btn(t(lang, "b_remove_admin", u=r["username"]), f"adm:rm:{r['id']}")])
+    buttons.append([btn(t(lang, "b_add_admin"), "adm:add")])
     await show(query, "\n".join(lines), InlineKeyboardMarkup(buttons + [back]))
 
 
@@ -1356,73 +1716,177 @@ async def handle_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     action = parts[1]
     uid = query.from_user.id
     if not await is_admin(uid):
-        await query.answer("Admins only.", show_alert=True)
+        await query.answer(t(await user_lang(uid), "admins_only"), show_alert=True)
         return
     await query.answer()
-    await get_user(query.from_user)
-    back = [btn("⬅️ Back", "adm:home")]
+    user = await get_user(query.from_user)
+    lang = user["lang"] or "en"
+    back = [btn(t(lang, "b_back"), "adm:home")]
+    cancel_home = kb([btn(t(lang, "b_cancel"), "adm:home")])
+
+    async def owner_only() -> bool:
+        if is_owner(uid):
+            return True
+        await query.answer(t(lang, "owner_only"), show_alert=True)
+        return False
 
     if action == "home":
         await set_state(uid, None)
-        text, markup = await admin_home_text_and_keyboard(uid)
+        text, markup = admin_home(uid, lang)
         await show(query, text, markup)
 
     elif action == "stats":
-        await show(query, await stats_text(), kb(back))
+        await show(query, await stats_text(lang), kb(back))
 
     elif action == "blocked":
-        await render_blocked(query, uid)
+        await render_blocked(query, uid, lang)
 
     elif action == "unb":
-        if not is_owner(uid):
-            await query.answer("Only the owner can unblock.", show_alert=True)
+        if not await owner_only():
             return
         await db("execute", "UPDATE users SET blocked = FALSE WHERE anon_code = $1", parts[2])
-        await render_blocked(query, uid)
+        await render_blocked(query, uid, lang)
 
     elif action == "block":
         await set_state(uid, "admin_block")
-        await show(
-            query,
-            "Send the sender code to block (the #CODE on a request).",
-            kb([btn("❌ Cancel", "adm:home")]),
-        )
+        await show(query, t(lang, "block_prompt"), cancel_home)
 
     elif action == "admins":
-        await render_admins(query, uid)
+        if not await owner_only():
+            return
+        await render_admins(query, uid, lang)
 
     elif action == "add":
-        if not is_owner(uid):
-            await query.answer("Only the owner can add admins.", show_alert=True)
+        if not await owner_only():
             return
         await set_state(uid, "admin_add")
-        await show(
-            query,
-            "Send the Telegram @username of the new admin.\n\nThey will also receive the prayer requests.",
-            kb([btn("❌ Cancel", "adm:home")]),
-        )
+        await show(query, t(lang, "admin_add_prompt"), cancel_home)
 
     elif action == "rm":
-        if not is_owner(uid):
-            await query.answer("Only the owner can remove admins.", show_alert=True)
+        if not await owner_only():
             return
         await db("execute", "DELETE FROM admins WHERE id = $1", int(parts[2]))
-        await render_admins(query, uid)
+        await render_admins(query, uid, lang)
+
+    elif action == "bc":
+        if not await owner_only():
+            return
+        await set_state(uid, "admin_broadcast")
+        await show(query, t(lang, "bc_prompt"), cancel_home)
 
 
 async def handle_block_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """'🚫 Block sender' under a request header."""
     query = update.callback_query
-    if not await is_admin(query.from_user.id):
-        await query.answer("Admins only.", show_alert=True)
+    uid = query.from_user.id
+    lang = await user_lang(uid)
+    if not await is_admin(uid):
+        await query.answer(t(lang, "admins_only"), show_alert=True)
         return
-    result = await set_blocked_by_code(query.data.split(":", 1)[1], True)
-    await query.answer(result, show_alert=True)
-    if result.startswith("🚫"):
-        try:
-            await query.edit_message_reply_markup(reply_markup=None)
-        except TelegramError:
-            pass
+    done, text = await set_blocked_by_code(query.data.split(":", 1)[1], True, lang)
+    await query.answer(text, show_alert=True)
+    if done:
+        await drop_buttons(query)
+
+
+# ---------------------------------------------------------------------------
+# Announcements to everyone (owner only)
+# ---------------------------------------------------------------------------
+async def audience_rows(which: str):
+    """Who gets an announcement: all users, or only daily-verse subscribers.
+    Blocked users never receive it."""
+    sql = "SELECT user_id, lang FROM users WHERE NOT blocked"
+    if which == "subs":
+        sql += " AND subscribed"
+    return await db("fetch", sql)
+
+
+async def run_broadcast(bot, from_chat_id: int, message_id: int, rows, owner_id: int, owner_lang: str):
+    """Runs in the background so the bot keeps answering everyone else."""
+    ok = failed = 0
+    try:
+        for row in rows:
+            lang = row["lang"] or "en"
+            for attempt in (1, 2):
+                try:
+                    await bot.copy_message(
+                        chat_id=row["user_id"],
+                        from_chat_id=from_chat_id,
+                        message_id=message_id,
+                        reply_markup=kb(menu_row_new(lang)),
+                    )
+                    ok += 1
+                    break
+                except RetryAfter as e:
+                    delay = e.retry_after
+                    delay = delay.total_seconds() if hasattr(delay, "total_seconds") else delay
+                    if attempt == 2:
+                        failed += 1
+                    else:
+                        await asyncio.sleep(float(delay) + 1)
+                except Forbidden:
+                    failed += 1  # they blocked the bot
+                    break
+                except TelegramError as e:
+                    logging.warning("Announcement failed for %s: %s", row["user_id"], e)
+                    failed += 1
+                    break
+            await asyncio.sleep(0.05)  # stay well under Telegram's rate limit
+    except Exception:
+        logging.exception("Announcement crashed")
+    try:
+        await bot.send_message(
+            chat_id=owner_id, text=t(owner_lang, "bc_done", ok=ok, failed=failed)
+        )
+    except TelegramError:
+        pass
+
+
+async def handle_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """bc:pick:<all|subs> -> confirm ; bc:go:<all|subs> -> send ; bc:cancel."""
+    query = update.callback_query
+    parts = query.data.split(":")
+    action = parts[1]
+    uid = query.from_user.id
+    if not is_owner(uid):
+        await query.answer(t(await user_lang(uid), "owner_only"), show_alert=True)
+        return
+    await query.answer()
+    user = await get_user(query.from_user)
+    lang = user["lang"] or "en"
+    back = kb([btn(t(lang, "b_back"), "adm:home")])
+
+    if action == "cancel":
+        await show(query, t(lang, "cancelled"), back)
+        return
+
+    which = parts[2] if len(parts) > 2 else ""
+    if which not in ("all", "subs"):
+        return
+    original = getattr(query.message, "reply_to_message", None)
+    if original is None:
+        await show(query, t(lang, "bc_expired"), back)
+        return
+    rows = await audience_rows(which)
+    audience = t(lang, "aud_all" if which == "all" else "aud_subs")
+
+    if action == "pick":
+        await show(
+            query,
+            t(lang, "bc_confirm", n=len(rows), audience=audience),
+            kb(
+                [btn(t(lang, "b_bc_yes"), f"bc:go:{which}")],
+                [btn(t(lang, "b_cancel"), "bc:cancel")],
+            ),
+        )
+    elif action == "go":
+        # Buttons off first: a double tap can never send the announcement twice.
+        if not await drop_buttons(query):
+            return
+        await show(query, t(lang, "bc_started", n=len(rows)), back)
+        context.application.create_task(
+            run_broadcast(context.bot, original.chat_id, original.message_id, rows, uid, lang)
+        )
 
 
 async def _admin_command_guard(update: Update, owner_only: bool) -> bool:
@@ -1433,42 +1897,53 @@ async def _admin_command_guard(update: Update, owner_only: bool) -> bool:
 
 async def handle_stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if await _admin_command_guard(update, False):
-        await update.message.reply_text(await stats_text())
+        lang = await user_lang(update.effective_user.id)
+        await update.message.reply_text(await stats_text(lang))
 
 
 async def handle_block_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if await _admin_command_guard(update, False):
+        lang = await user_lang(update.effective_user.id)
         if not context.args:
-            await update.message.reply_text("Usage: /block CODE")
+            await update.message.reply_text(t(lang, "usage_block"))
             return
-        await update.message.reply_text(await set_blocked_by_code(context.args[0], True))
+        _, text = await set_blocked_by_code(context.args[0], True, lang)
+        await update.message.reply_text(text)
 
 
 async def handle_unblock_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if await _admin_command_guard(update, True):
+        lang = await user_lang(update.effective_user.id)
         if not context.args:
-            await update.message.reply_text("Usage: /unblock CODE")
+            await update.message.reply_text(t(lang, "usage_unblock"))
             return
-        await update.message.reply_text(await set_blocked_by_code(context.args[0], False))
+        _, text = await set_blocked_by_code(context.args[0], False, lang)
+        await update.message.reply_text(text)
 
 
 async def handle_addadmin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if await _admin_command_guard(update, True):
+        lang = await user_lang(update.effective_user.id)
         if not context.args:
-            await update.message.reply_text("Usage: /addadmin @username")
+            await update.message.reply_text(t(lang, "usage_addadmin"))
             return
-        await update.message.reply_text(await add_admin(update.effective_user.id, context.args[0]))
+        await update.message.reply_text(
+            await add_admin(update.effective_user.id, context.args[0], lang)
+        )
 
 
 async def handle_removeadmin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if await _admin_command_guard(update, True):
+        lang = await user_lang(update.effective_user.id)
         username = parse_username(context.args[0]) if context.args else None
         if not username:
-            await update.message.reply_text("Usage: /removeadmin @username")
+            await update.message.reply_text(t(lang, "usage_removeadmin"))
             return
         result = await db("execute", "DELETE FROM admins WHERE username = $1", username)
         await update.message.reply_text(
-            f"Removed @{username}." if int(result.split()[-1]) else f"@{username} is not in the admin list."
+            t(lang, "removed", u=username)
+            if int(result.split()[-1])
+            else t(lang, "not_admin", u=username)
         )
 
 
@@ -1477,6 +1952,7 @@ async def handle_removeadmin_command(update: Update, context: ContextTypes.DEFAU
 # ---------------------------------------------------------------------------
 async def send_daily_reminder(context: ContextTypes.DEFAULT_TYPE):
     """06:30 Ethiopian-standard time: verse for daily-verse subscribers."""
+    await purge_expired_admins()
     rows = await db("fetch", "SELECT user_id, lang FROM users WHERE subscribed AND NOT blocked")
     logging.info("Sending daily verse to %d subscribers", len(rows))
     for row in rows:
@@ -1485,7 +1961,7 @@ async def send_daily_reminder(context: ContextTypes.DEFAULT_TYPE):
             await context.bot.send_message(
                 chat_id=row["user_id"],
                 text=t(lang, "reminder", verse=daily_verse(lang)),
-                reply_markup=kb(menu_row(lang)),
+                reply_markup=kb(menu_row_new(lang)),
             )
         except Forbidden:
             await db("execute", "UPDATE users SET subscribed = FALSE WHERE user_id = $1", row["user_id"])
@@ -1574,15 +2050,21 @@ async def on_error(update, context: ContextTypes.DEFAULT_TYPE):
 # ---------------------------------------------------------------------------
 # Application + web server (Render): Telegram webhook and /health
 # ---------------------------------------------------------------------------
-REQUEST_FILTER = filters.ChatType.PRIVATE & (
-    (filters.TEXT & ~filters.COMMAND)
-    | filters.PHOTO
-    | filters.VOICE
-    | filters.VIDEO
-    | filters.VIDEO_NOTE
-    | filters.AUDIO
-    | filters.Document.ALL
-    | filters.ANIMATION
+# Only brand-new messages. Edited messages have no update.message and would
+# crash the handlers.
+REQUEST_FILTER = (
+    filters.ChatType.PRIVATE
+    & filters.UpdateType.MESSAGE
+    & (
+        (filters.TEXT & ~filters.COMMAND)
+        | filters.PHOTO
+        | filters.VOICE
+        | filters.VIDEO
+        | filters.VIDEO_NOTE
+        | filters.AUDIO
+        | filters.Document.ALL
+        | filters.ANIMATION
+    )
 )
 
 
@@ -1596,7 +2078,7 @@ def build_application():
     for name, handler in (
         ("start", handle_start),
         ("menu", handle_menu_command),
-        ("help", handle_menu_command),
+        ("help", handle_help),
         ("stats", handle_stats_command),
         ("block", handle_block_command),
         ("unblock", handle_unblock_command),
@@ -1608,7 +2090,7 @@ def build_application():
     for pattern, handler in (
         (r"^lang:", handle_lang_choice),
         (r"^m:", handle_menu),
-        (r"^feel:", handle_feeling),
+        (r"^(feel|more):", handle_feeling),
         (r"^r:", handle_reminder_toggle),
         (r"^cat:", handle_category),
         (r"^send:", handle_send),
@@ -1616,13 +2098,16 @@ def build_application():
         (r"^js$", handle_save_request),
         (r"^j:", handle_journal),
         (r"^adm:", handle_admin),
+        (r"^bc:", handle_broadcast),
         (r"^blk:", handle_block_button),
     ):
         application.add_handler(CallbackQueryHandler(handler, pattern=pattern))
 
     application.add_handler(MessageHandler(REQUEST_FILTER, handle_message))
     # Anything else in private chat (stickers, locations, ...)
-    application.add_handler(MessageHandler(private & ~filters.COMMAND, handle_unsupported))
+    application.add_handler(
+        MessageHandler(private & filters.UpdateType.MESSAGE & ~filters.COMMAND, handle_unsupported)
+    )
     application.add_error_handler(on_error)
 
     jobs = application.job_queue
@@ -1645,6 +2130,12 @@ async def main():
     )
     async with pool.acquire() as conn:
         await conn.execute(SCHEMA)
+        try:
+            await conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS users_anon_code_uidx ON users (anon_code)"
+            )
+        except asyncpg.PostgresError as e:
+            logging.warning("Could not make anon_code unique (duplicate codes exist?): %s", e)
 
     application = build_application()
 
@@ -1652,7 +2143,11 @@ async def main():
         url=f"{WEBHOOK_URL}/{BOT_TOKEN}", allowed_updates=Update.ALL_TYPES
     )
     await application.bot.set_my_commands(
-        [BotCommand("start", "Start"), BotCommand("menu", "Open the menu")]
+        [
+            BotCommand("start", "Start"),
+            BotCommand("menu", "Open the menu"),
+            BotCommand("help", "About this bot & contact"),
+        ]
     )
 
     async def telegram_webhook(request: Request) -> Response:
