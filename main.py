@@ -958,7 +958,7 @@ async def handle_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
     header = (
         f"🙏 New prayer request · #{user['anon_code']}\n"
         f"📂 {CATEGORY_LABELS['en'][category]}\n"
-        f"🕒 {format_time(datetime.now(EAT), lang)}"
+        f"🕒 {format_time(datetime.now(EAT), 'en')}"
     )
     delivered = await deliver(
         context, original.chat_id, original.message_id, header, user["anon_code"]
@@ -995,6 +995,15 @@ async def handle_save_request(update: Update, context: ContextTypes.DEFAULT_TYPE
     if original is None or not original.text:
         await query.answer(t(lang, "cant_save"), show_alert=True)
         return
+    # Change the buttons FIRST. If a second tap arrives, this fails and we stop,
+    # so the entry can never be saved twice.
+    try:
+        await query.edit_message_reply_markup(
+            reply_markup=kb([btn(t(lang, "b_open_journal"), "j:home")], menu_row(lang))
+        )
+    except TelegramError:
+        await query.answer()
+        return
     await db(
         "execute",
         "INSERT INTO journal (user_id, body) VALUES ($1, $2)",
@@ -1002,9 +1011,6 @@ async def handle_save_request(update: Update, context: ContextTypes.DEFAULT_TYPE
         encrypt(original.text[:MAX_TEXT]),
     )
     await query.answer(t(lang, "saved_toast"))
-    await query.edit_message_reply_markup(
-        reply_markup=kb([btn(t(lang, "b_open_journal"), "j:home")], menu_row(lang))
-    )
 
 
 async def handle_unsupported(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1049,6 +1055,10 @@ async def handle_state_message(update: Update, user, lang: str):
 
     else:
         await set_state(uid, None)
+        await message.reply_text(
+            t(lang, "home"),
+            reply_markup=menu_keyboard(lang, await is_admin(uid)),
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -1101,7 +1111,8 @@ async def show_journal_list(query, lang: str, uid: int, offset: int):
         return
     buttons = []
     for row in rows[:8]:
-        snippet = decrypt(row["body"]).strip().splitlines()[0][:28] or "…"
+        lines = decrypt(row["body"]).strip().splitlines()
+        snippet = (lines[0][:28] if lines else "") or "…"
         mark = "✅" if row["answered_at"] else "🙏"
         label = f"{mark} {short_date(row['created_at'], lang)} · {snippet}"
         buttons.append([btn(label, f"j:view:{row['id']}")])
