@@ -254,7 +254,7 @@ TEXTS = {
         "request_prompt": "✍️ የጸሎት ጥያቄዎን አሁን ይላኩልኝ፦ ጽሑፍ፣ ፎቶ፣ ድምፅ፣ ቪዲዮ ወይም ፋይል።",
         "ask_category": "📂 ጥያቄዎ ስለ ምንድን ነው? ከስር ይምረጡ፦",
         "preview": (
-            "📝 የፀሎት ጥያቄዎ\n\nምድብ፦ {category}\n\nከላይ ያለው መልእክትዎ ስምዎ ሳይታወቅ ለጸሎት ቡድኑ "
+            "📝 የጸሎት ጥያቄዎ\n\nምድብ፦ {category}\n\nከላይ ያለው መልእክትዎ ስምዎ ሳይታወቅ ለጸሎት ቡድኑ "
             "ይላካል። ይላክ?"
         ),
         "cancelled": "ተሰርዟል። ምንም አልተላከም።",
@@ -290,7 +290,7 @@ TEXTS = {
         "entry_missing": "ይህ ጽሑፍ አልተገኘም።",
         "answered": "✅ ተመልሷል",
         "reminders_menu": (
-            "🔔 ማስታወሻዎች\n\n🌅 የዕለት የጥሞና ግዜ ጥቅስ (ጠዋት 12:30)፦ {daily}\n"
+            "🔔 የጥሞና ግዜ ማንቂያ\n\n🌅 የዕለት የጥሞና ግዜ ጥቅስ (ጠዋት 12:30)፦ {daily}\n"
             "📅 የሳምንት ነጸብራቅ (እሑድ ማታ)፦ {weekly}\n\nለማብራት ወይም ለማጥፋት ይንኩ።"
         ),
         "on": "በርቷል ✅",
@@ -333,7 +333,7 @@ TEXTS = {
         "r_d7": "በሳምንት ውስጥ",
         "r_d30": "በወር ውስጥ",
         "r_none": "አያስፈልግም",
-        "b_daily": "🌅 የዕለት ጥቅስ",
+        "b_daily": "🌅 የዕለት የጥሞና ግዜ ጥቅስ",
         "b_weekly": "📅 የሳምንት ነጸብራቅ",
         "b_write_reflection": "✍️ ነጸብራቅ ጻፍ",
         "b_open_journal": "📓 ማስታወሻ ክፈት",
@@ -367,22 +367,28 @@ FEELING_LABELS = {
 
 LORDS_PRAYER_TEXT = {
     "en": (
-        "🙏 The Lord's Prayer\n\n"
-        "Our Father, who art in heaven, hallowed be thy name.\n"
-        "Thy kingdom come, thy will be done, on earth as it is in heaven.\n"
-        "Give us this day our daily bread.\n"
-        "And forgive us our trespasses, as we forgive those who trespass against us.\n"
-        "And lead us not into temptation, but deliver us from evil.\n"
-        "For thine is the kingdom, and the power, and the glory, forever. Amen."
+        "🙏 The Lord's Prayer\n"
+        "📖 Matthew 6:9-13\n\n"
+        "Our Father in heaven,\n"
+        "hallowed be your name,\n"
+        "your kingdom come,\n"
+        "your will be done, on earth as it is in heaven.\n"
+        "Give us today our daily bread.\n"
+        "And forgive us our debts, as we also have forgiven our debtors.\n"
+        "And lead us not into temptation, but deliver us from the evil one,\n"
+        "for yours is the kingdom and the power and the glory forever. Amen."
     ),
     "am": (
-        "🙏 የጌታ ጸሎት\n\n"
-        "በሰማያት የምትኖር አባታችን ሆይ፤ ስምህ ይቀደስ።\n"
-        "መንግሥትህ ትምጣ፤ ፈቃድህ በሰማይ እንደሆነች እንዲሁም በምድር ትሁን።\n"
-        "የዕለት እንጀራችንን ዛሬ ስጠን።\n"
-        "እኛም የበደሉንን ይቅር እንደምንል፥ በደላችንን ይቅር በለን።\n"
-        "ከፈተና አታግባን እንጂ፥ ከክፉ አድነን እንጂ።\n"
-        "መንግሥት ያንተ ናትና፥ ኃይልም ክብርም ለዘላለም አሜን።"
+        "🙏 የጌታ ጸሎት\n"
+        "📖 ማቴዎስ 6:9-13\n\n"
+        "በሰማያት የምትኖር አባታችን ሆይ፥\n"
+        "ስምህ ይቀደስ፤\n"
+        "መንግሥትህ ትምጣ፤\n"
+        "ፈቃድህ በሰማይ እንደ ሆነች እንዲሁ በምድር ትሁን፤\n"
+        "የዕለት እንጀራችንን ዛሬ ስጠን፤\n"
+        "እኛም ደግሞ የበደሉንን ይቅር እንደምንል በደላችንን ይቅር በለን፤\n"
+        "ወደ ፈተናም አታግባን ከክፉው አድነን እንጂ፤\n"
+        "መንግሥት ያንተ ናትና ኃይልም ክብርም ለዘለዓለሙ፤ አሜን።"
     ),
 }
 
