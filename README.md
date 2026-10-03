@@ -1,29 +1,41 @@
 # Anonymous Prayer Bot
 
-Telegram bot that forwards prayer requests to recipients without revealing
-the sender.
+Telegram bot that passes prayer requests to a prayer team without revealing
+the sender. Everything is done with buttons (/menu opens the main menu).
 
 ## Features
-- Text, photo, voice, video, video note, audio and file requests
-- Amharic / English (chosen at /start, change with /language)
-- Category buttons (health, family, school, work, spiritual, other)
-- Persistent 15-second cooldown (stored in the database, survives restarts)
-- Timestamps in Ethiopian calendar and clock for Amharic senders, EAT otherwise
-- Daily prayer reminder with a verse at 06:30 Ethiopian time (/subscribe)
-- Admin tools: /stats, /block CODE, /unblock CODE (senders appear only as an
-  anonymous #CODE)
-- Bible verses from the World English Bible (public domain)
-- /lordsprayer in English and Amharic
+- Send a prayer request (text, photo, voice, video, video note, audio, file)
+  with a category and a preview (Send anonymously / Don't send)
+- Amharic / English, including Ethiopian calendar and clock for Amharic users
+- Scripture for the moment: pick a feeling, get a fitting verse
+- Private prayer journal: encrypted, optional reminder to revisit an entry,
+  mark answered, delete one entry or everything
+- Daily verse at 06:30 and a weekly reflection (Sunday evening), both opt-in
+- Persistent 15-second cooldown (stored in the database)
+- Owner (ultimate admin) and admins added by Telegram @username
+  - Admins: stats, block senders (also from the button under each request)
+  - Owner: all of that + unblock, add and remove admins
+  - Admins also receive the prayer requests
+- Senders appear only as an anonymous #CODE
 
 ## Environment variables
-- `BOT_TOKEN`: token from @BotFather
-- `MY_USER_ID`: recipient Telegram IDs, comma-separated
-- `DATABASE_URL`: Postgres connection string (Neon)
-- `ADMIN_IDS`: optional, comma-separated; defaults to the recipients
-- `WEBHOOK_URL`: optional; Render provides `RENDER_EXTERNAL_URL` itself
+| Name | Required | What |
+|---|---|---|
+| `BOT_TOKEN` | yes | token from @BotFather |
+| `MY_USER_ID` | yes | base prayer-team Telegram IDs, comma-separated (also admins) |
+| `DATABASE_URL` | yes | Neon Postgres connection string |
+| `JOURNAL_SECRET` | yes | long random secret that encrypts journals. Never change or lose it |
+| `OWNER_ID` | no | the ultimate admin's Telegram ID (defaults to the first `MY_USER_ID`) |
+| `AMHARIC_BIBLE_CREDIT` | no | credit line shown under Amharic verses |
+
+`WEBHOOK_URL` is optional; Render provides `RENDER_EXTERNAL_URL` itself.
+
+## Amharic verses
+Fill in `verses_am.json` (reference -> Amharic text). Empty entries fall back
+to English. Check the license of the Bible text you use.
 
 ## Run
-pip install -r requirements.txt
-python main.py
+    pip install -r requirements.txt
+    python main.py
 
-Health check: `/health`
+Health check: `/health`  (point UptimeRobot at it, 5-minute interval)
