@@ -263,6 +263,10 @@ TEXTS = {
         "role_owner": "Owner (full control)",
         "role_admin": "Admin",
         "b_stats": "📊 Stats",
+        "b_refresh": "🔄 Refresh",
+        "b_text_view": "📝 Text",
+        "b_image_view": "🖼 Picture",
+        "b_panel": "⬅️ Admin panel",
         "b_blocked": "🚫 Blocked senders",
         "b_block_code": "🚫 Block a code",
         "b_admins": "👥 Admins",
@@ -281,13 +285,6 @@ TEXTS = {
         "unblocked_ok": "✅ Unblocked #{code}",
         "code_missing": "No sender found with code #{code}.",
         "none_yet": "none yet",
-        "stats": (
-            "📊 Stats\n\n"
-            "Requests: today {today} · last 7 days {week} · total {total}\n\n"
-            "By category: {cats}\nBy type: {kinds}\n\n"
-            "Users: {users} · Amharic {u_am} · English {u_en} · blocked {blocked}\n"
-            "Daily verse subscribers: {sub} · weekly reflection: {weekly}"
-        ),
         "admins_head": "👥 Admins\n\n👑 Owner\n⚙️ {n} team member(s) from server settings",
         "status_active": "active",
         "status_pending": "pending (must open the bot and send /start within {h}h)",
@@ -1547,17 +1544,47 @@ async def handle_journal(update: Update, context: ContextTypes.DEFAULT_TYPE):
 #   owner : everything above + stats, unblock, add/remove admins, announcements,
 #           and the only person who can see who the other admins are
 # ---------------------------------------------------------------------------
-async def stats_text(lang: str) -> str:
-    start_of_today = datetime.now(EAT).replace(hour=0, minute=0, second=0, microsecond=0)
-    counts = await db(
+STATS_RULE = "━━━━━━━━━━━━━━━━━━━━"
+KIND_ICONS = {
+    "text": "💬", "photo": "🖼", "voice": "🎤", "video": "🎬", "video_note": "⭕",
+    "audio": "🎵", "animation": "🎞", "document": "📎",
+}  # fmt: skip
+CATEGORY_PLAIN = {
+    "health": "Health", "family": "Family", "school": "School / Exams",
+    "work": "Work / Money", "spiritual": "Spiritual", "other": "Other",
+}  # fmt: skip
+
+
+def _bar(n: int, total: int, width: int = 10) -> str:
+    filled = round(width * n / total) if total else 0
+    return "█" * filled + "░" * (width - filled)
+
+
+def _pct(n: int, total: int) -> str:
+    return f"{round(100 * n / total)}%" if total else "0%"
+
+
+async def stats_data() -> dict:
+    """All numbers for the owner dashboard (used by the picture and the text)."""
+    now = datetime.now(EAT)
+    start_today = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    week_start = start_today - timedelta(days=6)
+
+    req = await db(
         "fetchrow",
         """
         SELECT count(*) AS total,
                count(*) FILTER (WHERE created_at >= $1) AS today,
-               count(*) FILTER (WHERE created_at >= now() - interval '7 days') AS week
+               count(*) FILTER (WHERE created_at >= now() - interval '30 days') AS month
         FROM requests
         """,
-        start_of_today,
+        start_today,
+    )
+    day_rows = await db(
+        "fetch",
+        "SELECT (created_at AT TIME ZONE 'Africa/Addis_Ababa')::date AS d, count(*) AS n "
+        "FROM requests WHERE created_at >= $1 GROUP BY d",
+        week_start,
     )
     by_category = await db(
         "fetch",
@@ -1570,30 +1597,266 @@ async def stats_text(lang: str) -> str:
         "fetchrow",
         """
         SELECT count(*) AS total,
-               count(*) FILTER (WHERE subscribed) AS subscribed,
-               count(*) FILTER (WHERE weekly) AS weekly,
+               count(*) FILTER (WHERE created_at >= $1) AS new_today,
+               count(*) FILTER (WHERE created_at >= now() - interval '7 days') AS new_week,
                count(*) FILTER (WHERE lang = 'am') AS amharic,
                count(*) FILTER (WHERE lang = 'en') AS english,
+               count(*) FILTER (WHERE lang IS NULL) AS no_lang,
+               count(*) FILTER (WHERE subscribed) AS subscribed,
+               count(*) FILTER (WHERE weekly) AS weekly,
                count(*) FILTER (WHERE blocked) AS blocked
         FROM users
         """,
+        start_today,
     )
-    none_yet = t(lang, "none_yet")
-    labels = CATEGORY_LABELS["en"]
-    return t(
-        lang,
-        "stats",
-        today=counts["today"],
-        week=counts["week"],
-        total=counts["total"],
-        cats=" · ".join(f"{labels[r['category']]} {r['n']}" for r in by_category) or none_yet,
-        kinds=" · ".join(f"{r['kind']} {r['n']}" for r in by_kind) or none_yet,
-        users=users["total"],
-        u_am=users["amharic"],
-        u_en=users["english"],
-        blocked=users["blocked"],
-        sub=users["subscribed"],
-        weekly=users["weekly"],
+    per_day = {r["d"]: r["n"] for r in day_rows}
+    days = []
+    for i in range(6, -1, -1):
+        d = (now - timedelta(days=i)).date()
+        days.append((d, per_day.get(d, 0)))
+    return {
+        "now": now,
+        "req": dict(req),
+        "days": days,
+        "week_total": sum(n for _, n in days),
+        "peak": max((n for _, n in days), default=0),
+        "cats": [(r["category"], r["n"]) for r in by_category],
+        "kinds": [(r["kind"], r["n"]) for r in by_kind],
+        "users": dict(users),
+    }
+
+
+def format_stats_text(d: dict) -> str:
+    """Text version of the dashboard (bars made of block characters)."""
+    now, req, users = d["now"], d["req"], d["users"]
+    days, week_total, peak = d["days"], d["week_total"], d["peak"]
+    lines = [
+        "📊 PRAYER BOT DASHBOARD",
+        f"🕒 {now.strftime('%a %d %b, %H:%M')} EAT",
+        STATS_RULE,
+        "",
+        "🙏 PRAYER REQUESTS",
+        f"   Today          {req['today']}",
+        f"   Last 7 days    {week_total}  (avg {week_total / 7:.1f}/day)",
+        f"   Last 30 days   {req['month']}",
+        f"   All time       {req['total']}",
+        "",
+        "📈 LAST 7 DAYS",
+    ]
+    for day, n in days:
+        marker = " ◀ today" if day == now.date() else ""
+        lines.append(f"   {day.strftime('%a %d')}  {_bar(n, peak)}  {n}{marker}")
+
+    lines += ["", STATS_RULE, "", "📂 BY CATEGORY"]
+    cat_total = sum(n for _, n in d["cats"])
+    if d["cats"]:
+        for cat, n in d["cats"]:
+            lines.append(
+                f"   {CATEGORY_LABELS['en'][cat]}\n"
+                f"   {_bar(n, cat_total)}  {_pct(n, cat_total)} · {n}"
+            )
+    else:
+        lines.append("   nothing yet")
+
+    lines += ["", "📎 BY TYPE"]
+    if d["kinds"]:
+        lines.append(
+            "   " + "  ".join(f"{KIND_ICONS.get(k, '•')} {k} {n}" for k, n in d["kinds"])
+        )
+    else:
+        lines.append("   nothing yet")
+
+    total = users["total"]
+    lines += [
+        "",
+        STATS_RULE,
+        "",
+        "👥 USERS",
+        f"   Total {total}   🆕 +{users['new_today']} today · +{users['new_week']} this week",
+        f"   🇪🇹 Amharic   {_bar(users['amharic'], total)}  {_pct(users['amharic'], total)} · {users['amharic']}",
+        f"   🇺🇸 English   {_bar(users['english'], total)}  {_pct(users['english'], total)} · {users['english']}",
+    ]
+    if users["no_lang"]:
+        lines.append(f"   ❔ No language yet: {users['no_lang']}")
+    lines.append(f"   🚫 Blocked: {users['blocked']}")
+    lines += [
+        "",
+        "🔔 SUBSCRIPTIONS",
+        f"   🌅 Daily verse   {_bar(users['subscribed'], total)}  {_pct(users['subscribed'], total)} · {users['subscribed']}",
+        f"   📅 Weekly        {_bar(users['weekly'], total)}  {_pct(users['weekly'], total)} · {users['weekly']}",
+    ]
+    return "\n".join(lines)
+
+
+def render_stats_png(d: dict) -> bytes:
+    """Draw the dashboard as a PNG picture (needs Pillow >= 10.1; no system
+    fonts or emoji are used, so it looks the same on any server)."""
+    import io
+    from PIL import Image, ImageDraw, ImageFont
+
+    S, W = 3, 760  # drawn at 3x, then shrunk to 1.5x for smooth edges
+    BG, CARD, TRACK = (23, 33, 43), (31, 45, 61), (36, 52, 71)
+    TEXT, MUTED, SOFT, WHITE = (232, 238, 245), (127, 147, 168), (159, 179, 200), (255, 255, 255)
+    BLUE, BLUE_D, PURPLE, PURPLE_L = (94, 181, 247), (59, 130, 246), (139, 92, 246), (192, 132, 252)
+    GREEN, RED = (74, 222, 128), (248, 113, 113)
+    fonts: dict = {}
+
+    def font(px: int):
+        if px not in fonts:
+            fonts[px] = ImageFont.load_default(size=px * S)
+        return fonts[px]
+
+    class Null:  # measuring pass: same calls, nothing drawn
+        def __getattr__(self, name):
+            return lambda *a, **k: None
+
+    now, req, users = d["now"], d["req"], d["users"]
+    days, peak, week_total = d["days"], d["peak"], d["week_total"]
+
+    def layout(draw, img):
+        def tx(x, y, s, size=17, fill=TEXT, anchor="ls", bold=False):
+            draw.text(
+                (x * S, y * S), s, font=font(size), fill=fill, anchor=anchor,
+                stroke_width=1 if bold else 0, stroke_fill=fill,
+            )
+
+        def rrect(x, y, w, h, r, fill):
+            draw.rounded_rectangle([x * S, y * S, (x + w) * S, (y + h) * S], radius=r * S, fill=fill)
+
+        def gradient(x, y, w, h, c1, c2):
+            if img is None:
+                return
+            bw, bh = max(int(w * S), 2), max(int(h * S), 2)
+            grad = Image.new("RGB", (bw, bh))
+            gd = ImageDraw.Draw(grad)
+            for i in range(bw):
+                t_ = i / max(bw - 1, 1)
+                gd.line([(i, 0), (i, bh)], fill=tuple(int(c1[k] + (c2[k] - c1[k]) * t_) for k in range(3)))
+            mask = Image.new("L", (bw, bh), 0)
+            ImageDraw.Draw(mask).rounded_rectangle([0, 0, bw - 1, bh - 1], radius=bh // 2, fill=255)
+            img.paste(grad, (int(x * S), int(y * S)), mask)
+
+        def hbar(x, y, w, h, n, total, c1=BLUE_D, c2=BLUE):
+            rrect(x, y, w, h, h / 2, TRACK)
+            if total and n > 0:
+                gradient(x, y, max(w * n / total, h), h, c1, c2)
+
+        def section(y, title):
+            tx(40, y, title, 15, MUTED, bold=True)
+            draw.line([40 * S, (y + 10) * S, (W - 40) * S, (y + 10) * S], fill=TRACK, width=S)
+
+        def labeled_bar(y, label, n, total, c1=BLUE_D, c2=BLUE):
+            tx(40, y, label, 17)
+            pct = round(100 * n / total) if total else 0
+            tx(W - 40, y, f"{pct}%   {n}", 16, SOFT, anchor="rs")
+            hbar(40, y + 10, W - 80, 12, n, total, c1, c2)
+
+        # header
+        tx(40, 62, "Prayer Bot Dashboard", 30, WHITE, bold=True)
+        tx(40, 92, now.strftime("%a %d %b %Y  -  %H:%M EAT"), 16, MUTED)
+        # tiles
+        tiles = [("Today", req["today"]), ("Last 7 days", week_total), ("Last 30 days", req["month"]), ("All time", req["total"])]
+        tw = (W - 80 - 3 * 14) / 4
+        for i, (label, value) in enumerate(tiles):
+            x = 40 + i * (tw + 14)
+            rrect(x, 116, tw, 92, 16, CARD)
+            tx(x + 16, 148, label, 14, MUTED)
+            tx(x + 16, 190, f"{value:,}", 34, BLUE if i == 0 else WHITE, bold=True)
+        tx(40, 236, f"Average {week_total / 7:.1f} prayer requests per day this week", 15, MUTED)
+
+        # 7-day chart
+        section(278, "LAST 7 DAYS")
+        cw, base, maxh = (W - 120) / 7, 470, 130
+        for i, (day, n) in enumerate(days):
+            x, w = 60 + i * cw + cw * 0.18, cw * 0.64
+            is_today = day == now.date()
+            rrect(x, base - maxh, w, maxh, 8, CARD)
+            if n and peak:
+                h = max(maxh * n / peak, 10)
+                rrect(x, base - h, w, h, 8, BLUE if is_today else BLUE_D)
+            tx(x + w / 2, base - maxh - 8, str(n), 15, WHITE, anchor="ms", bold=True)
+            tx(x + w / 2, base + 24, day.strftime("%a"), 14, BLUE if is_today else MUTED, anchor="ms", bold=is_today)
+
+        # categories
+        section(540, "BY CATEGORY")
+        y = 574
+        cat_total = sum(n for _, n in d["cats"])
+        if d["cats"]:
+            for cat, n in d["cats"]:
+                labeled_bar(y, CATEGORY_PLAIN.get(cat, cat), n, cat_total)
+                y += 52
+        else:
+            tx(40, y, "Nothing yet", 17, MUTED)
+            y += 52
+
+        # types (wraps after 4 per row)
+        section(y + 10, "BY TYPE")
+        ty = y + 46
+        if d["kinds"]:
+            for i in range(0, len(d["kinds"]), 4):
+                row = d["kinds"][i : i + 4]
+                tx(40, ty, "      ".join(f"{k} {n}" for k, n in row), 17)
+                ty += 28
+        else:
+            tx(40, ty, "Nothing yet", 17, MUTED)
+            ty += 28
+        y = ty + 22
+
+        # users
+        total = users["total"]
+        section(y, "USERS")
+        tx(40, y + 38, f"Total {total:,}", 20, WHITE, bold=True)
+        tx(W - 40, y + 38, f"+{users['new_today']} today    +{users['new_week']} this week", 16, GREEN, anchor="rs")
+        y2 = y + 78
+        labeled_bar(y2, "Amharic", users["amharic"], total)
+        labeled_bar(y2 + 50, "English", users["english"], total, PURPLE, PURPLE_L)
+        y2 += 100
+        note = f"No language yet: {users['no_lang']}      Blocked: {users['blocked']}"
+        tx(40, y2 + 4, note, 15, RED if users["blocked"] else MUTED)
+        y = y2 + 44
+
+        # subscriptions
+        section(y, "SUBSCRIPTIONS")
+        y2 = y + 42
+        labeled_bar(y2, "Daily verse (6:30 AM)", users["subscribed"], total)
+        labeled_bar(y2 + 50, "Weekly reflection", users["weekly"], total, PURPLE, PURPLE_L)
+        return y2 + 50 + 40
+
+    height = layout(Null(), None)
+    img = Image.new("RGB", (W * S, height * S), BG)
+    layout(ImageDraw.Draw(img), img)
+    img = img.resize((W * S // 2, height * S // 2), Image.LANCZOS)
+    buf = io.BytesIO()
+    img.save(buf, format="PNG", optimize=True)
+    return buf.getvalue()
+
+
+async def send_stats(bot, chat_id: int, as_text: bool = False):
+    """Send the dashboard as a picture (or as text). Falls back to text if the
+    picture can't be made, for example when Pillow isn't installed."""
+    d = await stats_data()
+    if not as_text:
+        try:
+            png = await asyncio.to_thread(render_stats_png, d)
+            await bot.send_photo(
+                chat_id=chat_id,
+                photo=png,
+                caption=f"📊 Dashboard · {d['now'].strftime('%a %d %b, %H:%M')} EAT",
+                reply_markup=kb(
+                    [btn(t(ADMIN_LANG, "b_refresh"), "adm:statsr"), btn(t(ADMIN_LANG, "b_text_view"), "adm:statstext")],
+                    [btn(t(ADMIN_LANG, "b_panel"), "adm:homenew")],
+                ),
+            )
+            return
+        except Exception:
+            logging.exception("Could not make the stats picture; sending text instead")
+    await bot.send_message(
+        chat_id=chat_id,
+        text=format_stats_text(d),
+        reply_markup=kb(
+            [btn(t(ADMIN_LANG, "b_image_view"), "adm:statsr")],
+            [btn(t(ADMIN_LANG, "b_panel"), "adm:homenew")],
+        ),
     )
 
 
@@ -1731,10 +1994,19 @@ async def handle_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text, markup = admin_home(uid, lang)
         await show(query, text, markup)
 
-    elif action == "stats":
+    elif action in ("stats", "statsr", "statstext"):
         if not await owner_only():
             return
-        await show(query, await stats_text(lang), kb(back))
+        # From a stats message: take its buttons off first, so a double tap
+        # can't send two copies. The picture arrives as a new message.
+        if action != "stats" and not await drop_buttons(query):
+            return
+        await send_stats(context.bot, uid, as_text=(action == "statstext"))
+
+    elif action == "homenew":
+        if await drop_buttons(query):
+            text, markup = admin_home(uid, lang)
+            await context.bot.send_message(chat_id=uid, text=text, reply_markup=markup)
 
     elif action == "blocked":
         await render_blocked(query, uid, lang)
@@ -1953,8 +2225,7 @@ async def _admin_command_guard(update: Update, owner_only: bool) -> bool:
 
 async def handle_stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if await _admin_command_guard(update, True):  # stats: owner only
-        lang = ADMIN_LANG
-        await update.message.reply_text(await stats_text(lang))
+        await send_stats(context.bot, update.effective_chat.id)
 
 
 async def handle_block_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
