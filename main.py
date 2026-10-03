@@ -70,6 +70,7 @@ MAX_TEXT = 3500
 STATE_TTL_MINUTES = 30  # "waiting for text" states are ignored after this long
 ADMIN_PENDING_HOURS = 48  # a pending admin @username can be claimed for this long
 DEVELOPER_URL = "https://t.me/akseling"
+ADMIN_LANG = "en"  # the admin panel and admin notices are always English
 EAT = timezone(timedelta(hours=3))  # Ethiopia (East Africa Time), no daylight saving
 DAILY_TIME_UTC = dtime(hour=3, minute=30, tzinfo=timezone.utc)  # 06:30 EAT
 WEEKLY_TIME_UTC = dtime(hour=15, minute=0, tzinfo=timezone.utc)  # Sunday 18:00 EAT
@@ -160,7 +161,7 @@ TEXTS = {
             "Anonymous Prayer bot lets you share a prayer request without revealing who "
             "you are, so someone can pray for you. You can also find Scripture for how "
             "you feel, keep a private prayer journal, and set gentle reminders.\n\n"
-            "Tap 🏠 Menu to begin, or contact the developer if you need help."
+            "Tap 🏠 Menu to begin, or tap Contact the developer if you need help."
         ),
         "request_prompt": "✍️ Send me your prayer request now: text, a photo, a voice message, a video or a file.",
         "ask_category": "📂 What is your request about? Choose a category:",
@@ -229,7 +230,7 @@ TEXTS = {
         "b_language": "🌍 Language",
         "b_lords": "✝️ Lord's Prayer",
         "b_help": "ℹ️ Help",
-        "b_contact": "💬 Contact developer",
+        "b_contact": "💬 Contact the developer",
         "b_admin": "🔧 Admin",
         "b_menu": "🏠 Menu",
         "b_confirm_send": "✅ Send anonymously",
@@ -285,26 +286,45 @@ TEXTS = {
             "Requests: today {today} · last 7 days {week} · total {total}\n\n"
             "By category: {cats}\nBy type: {kinds}\n\n"
             "Users: {users} · Amharic {u_am} · English {u_en} · blocked {blocked}\n"
-            "Daily verse subscribers: {sub} · weekly reflection: {weekly}\n"
-            "Journal entries (count only): {journal}"
+            "Daily verse subscribers: {sub} · weekly reflection: {weekly}"
         ),
         "admins_head": "👥 Admins\n\n👑 Owner\n⚙️ {n} team member(s) from server settings",
         "status_active": "active",
         "status_pending": "pending (must open the bot and send /start within {h}h)",
+        "status_invited": "invited, waiting for their answer ({h}h left)",
         "admin_add_prompt": "Send the Telegram @username of the new admin.\n\nThey will also receive the prayer requests.",
         "add_bad": "That doesn't look like a Telegram @username (5-32 letters, numbers or _).",
         "add_dup": "@{u} is already an admin.",
-        "add_active": "✅ @{u} is now an admin. They have been notified.",
+        "add_active": "✅ Invitation sent to @{u}. They become an admin once they accept.",
         "add_pending": (
             "✅ Added @{u}. They have 48 hours to open this bot and send /start. They "
-            "become active then, and you'll get a message. Only add people who can do "
-            "this right away."
+            "will then be asked to accept or decline, and you'll be told their answer. "
+            "Only add people who can do this right away."
         ),
         "admin_now": (
             "🔧 You are now an admin of this bot. Open 🏠 Menu → 🔧 Admin. "
             "You will also receive the prayer requests."
         ),
-        "owner_notice": "✅ @{u} is now an active admin.",
+        "owner_accepted": "✅ @{u} accepted the admin role.",
+        "owner_declined": "❌ @{u} declined the admin role.",
+        "owner_quit": "🚪 @{u} quit the admin role.",
+        "admin_invite": (
+            "🔧 Admin invitation\n\nYou have been asked to become an admin of this bot. "
+            "Admins receive the prayer requests, which are private and must never be "
+            "shared with anyone. Do you accept?"
+        ),
+        "b_accept_admin": "✅ Accept",
+        "b_decline_admin": "❌ Decline",
+        "admin_declined": "Okay, you declined. Nothing has changed.",
+        "invite_gone": "This invitation is no longer valid.",
+        "b_quit": "🚪 Quit admin role",
+        "quit_confirm": (
+            "Quit being an admin?\n\nYou will stop receiving prayer requests. "
+            "The owner will be notified."
+        ),
+        "b_quit_yes": "🚪 Yes, quit",
+        "quit_done": "You are no longer an admin.",
+        "quit_server": "Your admin access comes from the server settings, so it can't be changed here. Please ask the owner.",
         "removed": "Removed @{u}.",
         "not_admin": "@{u} is not in the admin list.",
         "usage_block": "Usage: /block CODE",
@@ -317,6 +337,7 @@ TEXTS = {
             "a voice message or a file.\n\nYou'll choose who receives it next."
         ),
         "bc_choose": "Who should receive this message?",
+        "bc_preview": "📝 Preview. This is exactly what people will receive:",
         "b_bc_all": "👥 All users ({n})",
         "b_bc_subs": "🌅 Daily verse subscribers ({n})",
         "aud_all": "all users",
@@ -340,7 +361,7 @@ TEXTS = {
             "Anonymous Prayer bot ማንነትዎ ሳይታወቅ የጸሎት ጥያቄ እንዲያካፍሉ ያስችልዎታል፤ ሌላ ሰውም "
             "ስለእርስዎ ይጸልያል። እንዲሁም ለሚሰማዎት ስሜት የሚሆን ጥቅስ ማግኘት፣ የግል የጸሎት ማስታወሻ "
             "መያዝ እና ማንቂያ ማዘጋጀት ይችላሉ።\n\n"
-            "ለመጀመር 🏠 ዋና ማውጫን ይንኩ፤ እርዳታ ካስፈለግዎ ገንቢውን ያነጋግሩ።"
+            "ለመጀመር 🏠 ዋና ማውጫን ይንኩ፤ እርዳታ ካስፈለግዎ Contact the developer."
         ),
         "request_prompt": "✍️ የጸሎት ጥያቄዎን አሁን ይላኩልኝ፦ ጽሑፍ፣ ፎቶ፣ ድምፅ፣ ቪዲዮ ወይም ፋይል።",
         "ask_category": "📂 ጥያቄዎ ስለ ምንድን ነው? ከስር ይምረጡ፦",
@@ -406,7 +427,7 @@ TEXTS = {
         "b_language": "🌍 ቋንቋ",
         "b_lords": "✝️ የጌታ ጸሎት",
         "b_help": "ℹ️ እገዛ",
-        "b_contact": "💬 ገንቢውን አነጋግር",
+        "b_contact": "💬 Contact the developer",
         "b_admin": "🔧 አስተዳዳሪ",
         "b_menu": "🏠 ዋና ማውጫ",
         "b_confirm_send": "✅ ላክ",
@@ -434,74 +455,19 @@ TEXTS = {
         "b_write_reflection": "✍️ ነጸብራቅ ጻፍ",
         "b_open_journal": "📓 ማስታወሻ ክፈት",
         "b_open_entry": "📄 ጽሑፉን ክፈት",
-        # ---- admin panel ----
-        "adm_panel": "🔧 የአስተዳዳሪ ማውጫ\n\nሚናዎ፦ {role}",
-        "role_owner": "ባለቤት (ሙሉ ቁጥጥር)",
-        "role_admin": "አስተዳዳሪ",
-        "b_stats": "📊 ስታቲስቲክስ",
-        "b_blocked": "🚫 የታገዱ ላኪዎች",
-        "b_block_code": "🚫 ኮድ አግድ",
-        "b_admins": "👥 አስተዳዳሪዎች",
-        "b_broadcast": "📢 ለሁሉም መልእክት ላክ",
-        "b_unblock": "✅ #{code} ፍታ",
-        "b_remove_admin": "❌ @{u} አስወግድ",
-        "b_add_admin": "➕ አስተዳዳሪ ጨምር",
-        "admins_only": "ለአስተዳዳሪዎች ብቻ።",
-        "owner_only": "ይህን ማድረግ የሚችለው ባለቤቱ ብቻ ነው።",
-        "no_blocked": "የታገዱ ላኪዎች የሉም።",
-        "blocked_list": "🚫 የታገዱ ላኪዎች፦\n{items}",
-        "blocked_note": "\n\nእገዳውን ማንሳት የሚችለው ባለቤቱ ብቻ ነው።",
-        "block_prompt": "ማገድ የሚፈልጉትን የላኪ ኮድ ይላኩ (በጥያቄው ላይ ያለው #ኮድ)።",
-        "bad_code": "ይህ የላኪ ኮድ አይመስልም። ከ8 እስከ 12 ቁምፊዎች ነው፤ ለምሳሌ #A1B2C3D4E5F6።",
-        "blocked_ok": "🚫 #{code} ታግዷል",
-        "unblocked_ok": "✅ #{code} ተፈቷል",
-        "code_missing": "በ#{code} ኮድ ላኪ አልተገኘም።",
-        "none_yet": "እስካሁን የለም",
-        "stats": (
-            "📊 ስታቲስቲክስ\n\n"
-            "የጸሎት ጥያቄዎች፦ ዛሬ {today} · ባለፉት 7 ቀናት {week} · በጠቅላላው {total}\n\n"
-            "በምድብ፦ {cats}\nበአይነት፦ {kinds}\n\n"
-            "ተጠቃሚዎች፦ {users} · አማርኛ {u_am} · እንግሊዝኛ {u_en} · የታገዱ {blocked}\n"
-            "የዕለት ጥቅስ ተመዝጋቢዎች፦ {sub} · የሳምንት ነጸብራቅ፦ {weekly}\n"
-            "የማስታወሻ ጽሑፎች (ቁጥር ብቻ)፦ {journal}"
-        ),
-        "admins_head": "👥 አስተዳዳሪዎች\n\n👑 ባለቤት\n⚙️ ከሰርቨር ቅንብር {n} የቡድን አባል(ላት)",
-        "status_active": "ንቁ",
-        "status_pending": "በመጠባበቅ ላይ (በ{h} ሰዓት ውስጥ ቦቱን ከፍቶ /start መላክ አለበት)",
-        "admin_add_prompt": "የአዲሱን አስተዳዳሪ የቴሌግራም @username ይላኩ።\n\nየጸሎት ጥያቄዎችንም ይቀበላል።",
-        "add_bad": "ይህ የቴሌግራም @username አይመስልም (ከ5-32 ፊደላት፣ ቁጥሮች ወይም _)።",
-        "add_dup": "@{u} አስቀድሞ አስተዳዳሪ ነው።",
-        "add_active": "✅ @{u} አሁን አስተዳዳሪ ሆኗል፤ ማሳወቂያ ደርሶታል።",
-        "add_pending": (
-            "✅ @{u} ተጨምሯል። በ48 ሰዓት ውስጥ ይህን ቦት ከፍቶ /start መላክ አለበት። ሲልክ ንቁ ይሆናል፤ "
-            "እርስዎም መልእክት ይደርስዎታል። ወዲያውኑ ይህን ማድረግ የሚችሉ ሰዎችን ብቻ ይጨምሩ።"
-        ),
+        # ---- admin invitation (the admin panel itself is English only) ----
         "admin_now": (
             "🔧 አሁን የዚህ ቦት አስተዳዳሪ ሆነዋል። 🏠 ዋና ማውጫ → 🔧 አስተዳዳሪ ይክፈቱ። "
             "የጸሎት ጥያቄዎችንም ይቀበላሉ።"
         ),
-        "owner_notice": "✅ @{u} አሁን ንቁ አስተዳዳሪ ነው።",
-        "removed": "@{u} ተወግዷል።",
-        "not_admin": "@{u} በአስተዳዳሪዎች ዝርዝር ውስጥ የለም።",
-        "usage_block": "አጠቃቀም፦ /block CODE",
-        "usage_unblock": "አጠቃቀም፦ /unblock CODE",
-        "usage_addadmin": "አጠቃቀም፦ /addadmin @username",
-        "usage_removeadmin": "አጠቃቀም፦ /removeadmin @username",
-        # ---- announcements (owner only) ----
-        "bc_prompt": (
-            "📢 ማሳወቅ የሚፈልጉትን መልእክት ይላኩ። ጽሑፍ፣ ፎቶ፣ ቪዲዮ፣ ድምፅ ወይም ፋይል ሊሆን ይችላል።\n\n"
-            "ቀጥሎ ተቀባዮችን ይመርጣሉ።"
+        "admin_invite": (
+            "🔧 የአስተዳዳሪነት ጥያቄ\n\nየዚህ ቦት አስተዳዳሪ እንዲሆኑ ተጠይቀዋል። አስተዳዳሪዎች የጸሎት "
+            "ጥያቄዎችን ይቀበላሉ፤ ጥያቄዎቹ የግል ስለሆኑ ለማንም መነገር የለባቸውም። ይቀበላሉ?"
         ),
-        "bc_choose": "መልእክቱ ለማን ይላክ?",
-        "b_bc_all": "👥 ለሁሉም ተጠቃሚዎች ({n})",
-        "b_bc_subs": "🌅 ለዕለት ጥቅስ ተመዝጋቢዎች ({n})",
-        "aud_all": "ሁሉም ተጠቃሚዎች",
-        "aud_subs": "የዕለት ጥቅስ ተመዝጋቢዎች",
-        "bc_confirm": "ከላይ ያለውን መልእክት ለ{n} ሰዎች ({audience}) ይላክ? ከተላከ መመለስ አይቻልም።",
-        "b_bc_yes": "✅ አዎ፣ አሁን ላክ",
-        "bc_started": "📤 ለ{n} ሰዎች በመላክ ላይ ነው… ሲጠናቀቅ አሳውቅዎታለሁ።",
-        "bc_done": "✅ ማስታወቂያው ተጠናቋል።\nደርሷል፦ {ok}\nአልደረሰም፦ {failed}",
-        "bc_expired": "ይህን መልእክት ማግኘት አልቻልኩም። ከ📢 እንደገና ይጀምሩ።",
+        "b_accept_admin": "✅ ተቀበል",
+        "b_decline_admin": "❌ አልቀበልም",
+        "admin_declined": "እሺ፣ አልተቀበሉም። ምንም አልተቀየረም።",
+        "invite_gone": "ይህ ጥያቄ ከአሁን በኋላ አይሰራም።",
     },
 }
 
@@ -655,6 +621,7 @@ CREATE TABLE IF NOT EXISTS admins (
     added_by   BIGINT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+ALTER TABLE admins ADD COLUMN IF NOT EXISTS accepted_at TIMESTAMPTZ;
 CREATE TABLE IF NOT EXISTS journal (
     id          BIGSERIAL PRIMARY KEY,
     user_id     BIGINT NOT NULL,
@@ -714,18 +681,14 @@ def decrypt(token: str) -> str:
 
 
 async def purge_expired_admins():
-    """Pending admin @usernames that nobody claimed in time are deleted, so a
-    released or changed username can never be claimed by a stranger later."""
+    """Admin invitations nobody answered in time (or never claimed) are deleted,
+    so a released or changed username can never be claimed by a stranger later."""
     await db(
         "execute",
-        "DELETE FROM admins WHERE user_id IS NULL "
+        "DELETE FROM admins WHERE accepted_at IS NULL "
         "AND created_at <= now() - make_interval(hours => $1)",
         ADMIN_PENDING_HOURS,
     )
-
-
-async def user_lang(user_id: int) -> str:
-    return (await db("fetchval", "SELECT lang FROM users WHERE user_id = $1", user_id)) or "en"
 
 
 async def get_user(tg_user):
@@ -760,24 +723,28 @@ async def get_user(tg_user):
             ADMIN_PENDING_HOURS,
         )
         if claimed and _bot is not None:
-            await _notify_admin_promoted(tg_user.id, row["lang"] or "en")
-            await _notify_owner_admin_active(tg_user.username)
+            await _send_admin_invite(tg_user.id, row["lang"] or "en")
     return row
 
 
-async def _notify_admin_promoted(user_id: int, lang: str):
+async def _send_admin_invite(user_id: int, lang: str):
+    """Nobody becomes an admin without saying yes: they get Accept / Decline."""
     try:
-        await _bot.send_message(chat_id=user_id, text=t(lang, "admin_now"))
-    except TelegramError as e:
-        logging.warning("Admin notification failed: %s", e)
-
-
-async def _notify_owner_admin_active(username: str):
-    try:
-        owner_lang = await user_lang(OWNER_ID)
         await _bot.send_message(
-            chat_id=OWNER_ID, text=t(owner_lang, "owner_notice", u=username)
+            chat_id=user_id,
+            text=t(lang, "admin_invite"),
+            reply_markup=kb(
+                [btn(t(lang, "b_accept_admin"), "ainv:yes"), btn(t(lang, "b_decline_admin"), "ainv:no")]
+            ),
         )
+    except TelegramError as e:
+        logging.warning("Admin invitation failed: %s", e)
+
+
+async def _notify_owner(text: str):
+    """Tell the owner about admin changes (accepted, declined, quit)."""
+    try:
+        await _bot.send_message(chat_id=OWNER_ID, text=text)
     except TelegramError as e:
         logging.warning("Owner notification failed: %s", e)
 
@@ -785,7 +752,13 @@ async def _notify_owner_admin_active(username: str):
 async def is_admin(user_id: int) -> bool:
     if user_id == OWNER_ID or user_id in RECIPIENT_IDS:
         return True
-    return bool(await db("fetchval", "SELECT 1 FROM admins WHERE user_id = $1", user_id))
+    return bool(
+        await db(
+            "fetchval",
+            "SELECT 1 FROM admins WHERE user_id = $1 AND accepted_at IS NOT NULL",
+            user_id,
+        )
+    )
 
 
 def is_owner(user_id: int) -> bool:
@@ -793,7 +766,9 @@ def is_owner(user_id: int) -> bool:
 
 
 async def recipient_ids() -> list[int]:
-    rows = await db("fetch", "SELECT user_id FROM admins WHERE user_id IS NOT NULL")
+    rows = await db(
+        "fetch", "SELECT user_id FROM admins WHERE user_id IS NOT NULL AND accepted_at IS NOT NULL"
+    )
     ids = [OWNER_ID, *RECIPIENT_IDS, *[r["user_id"] for r in rows]]
     return list(dict.fromkeys(ids))  # unique, keeps order
 
@@ -1316,12 +1291,23 @@ async def handle_state_message(update: Update, user, lang: str):
         await set_state(uid, None)
         everyone = len(await audience_rows("all"))
         subs = len(await audience_rows("subs"))
+        # Preview: the owner sees the message exactly as people will receive it.
+        try:
+            await context.bot.send_message(chat_id=uid, text=t(ADMIN_LANG, "bc_preview"))
+            await context.bot.copy_message(
+                chat_id=uid,
+                from_chat_id=message.chat_id,
+                message_id=message.message_id,
+                reply_markup=kb(menu_row_new(lang)),
+            )
+        except TelegramError as e:
+            logging.warning("Announcement preview failed: %s", e)
         await message.reply_text(
-            t(lang, "bc_choose"),
+            t(ADMIN_LANG, "bc_choose"),
             reply_markup=kb(
-                [btn(t(lang, "b_bc_all", n=everyone), "bc:pick:all")],
-                [btn(t(lang, "b_bc_subs", n=subs), "bc:pick:subs")],
-                [btn(t(lang, "b_cancel"), "bc:cancel")],
+                [btn(t(ADMIN_LANG, "b_bc_all", n=everyone), "bc:pick:all")],
+                [btn(t(ADMIN_LANG, "b_bc_subs", n=subs), "bc:pick:subs")],
+                [btn(t(ADMIN_LANG, "b_cancel"), "bc:cancel")],
             ),
             reply_parameters=ReplyParameters(message_id=message.message_id),
         )
@@ -1348,11 +1334,11 @@ async def handle_state_message(update: Update, user, lang: str):
 
     elif state == "admin_add" and is_owner(uid):
         await set_state(uid, None)
-        await message.reply_text(await add_admin(uid, message.text, lang))
+        await message.reply_text(await add_admin(uid, message.text, ADMIN_LANG))
 
     elif state == "admin_block" and await is_admin(uid):
         await set_state(uid, None)
-        _, text = await set_blocked_by_code(message.text, True, lang)
+        _, text = await set_blocked_by_code(message.text, True, ADMIN_LANG)
         await message.reply_text(text)
 
     else:
@@ -1555,10 +1541,10 @@ async def handle_journal(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ---------------------------------------------------------------------------
-# Admin: owner (ultimate admin) and admins. Everything is shown in the
-# admin's own language.
-#   admins: see stats, block senders
-#   owner : everything above + unblock, add/remove admins, announcements,
+# Admin: owner (ultimate admin) and admins. The admin panel is always English
+# (prayer requests and reminders still arrive in each person's own language).
+#   admins: block senders, quit the admin role
+#   owner : everything above + stats, unblock, add/remove admins, announcements,
 #           and the only person who can see who the other admins are
 # ---------------------------------------------------------------------------
 async def stats_text(lang: str) -> str:
@@ -1592,9 +1578,8 @@ async def stats_text(lang: str) -> str:
         FROM users
         """,
     )
-    journal = await db("fetchval", "SELECT count(*) FROM journal")
     none_yet = t(lang, "none_yet")
-    labels = CATEGORY_LABELS[lang if lang in CATEGORY_LABELS else "en"]
+    labels = CATEGORY_LABELS["en"]
     return t(
         lang,
         "stats",
@@ -1609,7 +1594,6 @@ async def stats_text(lang: str) -> str:
         blocked=users["blocked"],
         sub=users["subscribed"],
         weekly=users["weekly"],
-        journal=journal,
     )
 
 
@@ -1627,9 +1611,10 @@ async def set_blocked_by_code(raw: str, blocked: bool, lang: str) -> tuple[bool,
 
 
 async def add_admin(owner_id: int, raw: str, lang: str) -> str:
-    """If the person already started the bot they become an admin immediately
-    and are notified. Otherwise a pending row is made that expires after
-    ADMIN_PENDING_HOURS."""
+    """The person always gets an Accept / Decline invitation. If they already
+    started the bot it is sent right now; otherwise a pending row is made that
+    expires after ADMIN_PENDING_HOURS and the invitation goes out when they
+    first send /start."""
     username = parse_username(raw)
     if username is None:
         return t(lang, "add_bad")
@@ -1650,19 +1635,29 @@ async def add_admin(owner_id: int, raw: str, lang: str) -> str:
     if row is None:
         return t(lang, "add_dup", u=username)
     if known:
-        await _notify_admin_promoted(known["user_id"], known["lang"] or "en")
+        await _send_admin_invite(known["user_id"], known["lang"] or "en")
         return t(lang, "add_active", u=username)
     return t(lang, "add_pending", u=username)
 
 
+def can_quit_admin(uid: int) -> bool:
+    """Admins added from the bot can quit. The owner and the team set in the
+    server settings (MY_USER_ID) are managed outside the bot."""
+    return not is_owner(uid) and uid not in RECIPIENT_IDS
+
+
 def admin_home(uid: int, lang: str):
-    rows = [
-        [btn(t(lang, "b_stats"), "adm:stats"), btn(t(lang, "b_blocked"), "adm:blocked")],
-        [btn(t(lang, "b_block_code"), "adm:block")],
-    ]
+    first = []
     if is_owner(uid):
-        rows[1].append(btn(t(lang, "b_admins"), "adm:admins"))
+        first.append(btn(t(lang, "b_stats"), "adm:stats"))  # stats: owner only
+    first.append(btn(t(lang, "b_blocked"), "adm:blocked"))
+    second = [btn(t(lang, "b_block_code"), "adm:block")]
+    rows = [first, second]
+    if is_owner(uid):
+        second.append(btn(t(lang, "b_admins"), "adm:admins"))
         rows.append([btn(t(lang, "b_broadcast"), "adm:bc")])
+    elif can_quit_admin(uid):
+        rows.append([btn(t(lang, "b_quit"), "adm:quit")])
     rows.append(menu_row(lang))
     role = t(lang, "role_owner" if is_owner(uid) else "role_admin")
     return t(lang, "adm_panel", role=role), InlineKeyboardMarkup(rows)
@@ -1691,7 +1686,7 @@ async def render_admins(query, uid: int, lang: str):
     back = [btn(t(lang, "b_back"), "adm:home")]
     rows = await db(
         "fetch",
-        "SELECT id, username, user_id, "
+        "SELECT id, username, user_id, accepted_at, "
         "GREATEST(1, CEIL(EXTRACT(EPOCH FROM (created_at + make_interval(hours => $1) - now())) / 3600))::int AS hours_left "
         "FROM admins ORDER BY id",
         ADMIN_PENDING_HOURS,
@@ -1699,11 +1694,12 @@ async def render_admins(query, uid: int, lang: str):
     lines = [t(lang, "admins_head", n=len(RECIPIENT_IDS))]
     buttons = []
     for r in rows:
-        status = (
-            t(lang, "status_active")
-            if r["user_id"]
-            else t(lang, "status_pending", h=r["hours_left"])
-        )
+        if r["accepted_at"]:
+            status = t(lang, "status_active")
+        elif r["user_id"]:
+            status = t(lang, "status_invited", h=r["hours_left"])
+        else:
+            status = t(lang, "status_pending", h=r["hours_left"])
         lines.append(f"• @{r['username']} — {status}")
         buttons.append([btn(t(lang, "b_remove_admin", u=r["username"]), f"adm:rm:{r['id']}")])
     buttons.append([btn(t(lang, "b_add_admin"), "adm:add")])
@@ -1715,12 +1711,12 @@ async def handle_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     parts = query.data.split(":")
     action = parts[1]
     uid = query.from_user.id
+    lang = ADMIN_LANG
     if not await is_admin(uid):
-        await query.answer(t(await user_lang(uid), "admins_only"), show_alert=True)
+        await query.answer(t(lang, "admins_only"), show_alert=True)
         return
     await query.answer()
-    user = await get_user(query.from_user)
-    lang = user["lang"] or "en"
+    await get_user(query.from_user)
     back = [btn(t(lang, "b_back"), "adm:home")]
     cancel_home = kb([btn(t(lang, "b_cancel"), "adm:home")])
 
@@ -1736,6 +1732,8 @@ async def handle_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await show(query, text, markup)
 
     elif action == "stats":
+        if not await owner_only():
+            return
         await show(query, await stats_text(lang), kb(back))
 
     elif action == "blocked":
@@ -1774,16 +1772,74 @@ async def handle_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await set_state(uid, "admin_broadcast")
         await show(query, t(lang, "bc_prompt"), cancel_home)
 
+    elif action == "quit":
+        if not can_quit_admin(uid):
+            await query.answer(t(lang, "quit_server"), show_alert=True)
+            return
+        await show(
+            query,
+            t(lang, "quit_confirm"),
+            kb([btn(t(lang, "b_quit_yes"), "adm:quityes")], [btn(t(lang, "b_cancel"), "adm:home")]),
+        )
+
+    elif action == "quityes":
+        if not can_quit_admin(uid):
+            await query.answer(t(lang, "quit_server"), show_alert=True)
+            return
+        row = await db(
+            "fetchrow",
+            "DELETE FROM admins WHERE user_id = $1 AND accepted_at IS NOT NULL RETURNING username",
+            uid,
+        )
+        await show(query, t(lang, "quit_done"), kb(menu_row(lang)))
+        if row:
+            await _notify_owner(t(ADMIN_LANG, "owner_quit", u=row["username"]))
+
+
+async def handle_admin_invite(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Accept / Decline on an admin invitation. The owner is told either way."""
+    query = update.callback_query
+    answer = query.data.split(":", 1)[1]
+    await query.answer()
+    user = await get_user(query.from_user)
+    lang = user["lang"] or "en"
+    uid = query.from_user.id
+
+    if answer == "yes":
+        row = await db(
+            "fetchrow",
+            "UPDATE admins SET accepted_at = now() "
+            "WHERE user_id = $1 AND accepted_at IS NULL "
+            "AND created_at > now() - make_interval(hours => $2) RETURNING username",
+            uid,
+            ADMIN_PENDING_HOURS,
+        )
+        if row is None:
+            await show(query, t(lang, "invite_gone"), kb(menu_row(lang)))
+            return
+        await show(query, t(lang, "admin_now"), kb(menu_row(lang)))
+        await _notify_owner(t(ADMIN_LANG, "owner_accepted", u=row["username"]))
+    elif answer == "no":
+        row = await db(
+            "fetchrow",
+            "DELETE FROM admins WHERE user_id = $1 AND accepted_at IS NULL RETURNING username",
+            uid,
+        )
+        if row is None:
+            await show(query, t(lang, "invite_gone"), kb(menu_row(lang)))
+            return
+        await show(query, t(lang, "admin_declined"), kb(menu_row(lang)))
+        await _notify_owner(t(ADMIN_LANG, "owner_declined", u=row["username"]))
+
 
 async def handle_block_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """'🚫 Block sender' under a request header."""
     query = update.callback_query
     uid = query.from_user.id
-    lang = await user_lang(uid)
     if not await is_admin(uid):
-        await query.answer(t(lang, "admins_only"), show_alert=True)
+        await query.answer(t(ADMIN_LANG, "admins_only"), show_alert=True)
         return
-    done, text = await set_blocked_by_code(query.data.split(":", 1)[1], True, lang)
+    done, text = await set_blocked_by_code(query.data.split(":", 1)[1], True, ADMIN_LANG)
     await query.answer(text, show_alert=True)
     if done:
         await drop_buttons(query)
@@ -1848,12 +1904,12 @@ async def handle_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     parts = query.data.split(":")
     action = parts[1]
     uid = query.from_user.id
+    lang = ADMIN_LANG
     if not is_owner(uid):
-        await query.answer(t(await user_lang(uid), "owner_only"), show_alert=True)
+        await query.answer(t(lang, "owner_only"), show_alert=True)
         return
     await query.answer()
-    user = await get_user(query.from_user)
-    lang = user["lang"] or "en"
+    await get_user(query.from_user)
     back = kb([btn(t(lang, "b_back"), "adm:home")])
 
     if action == "cancel":
@@ -1896,14 +1952,14 @@ async def _admin_command_guard(update: Update, owner_only: bool) -> bool:
 
 
 async def handle_stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if await _admin_command_guard(update, False):
-        lang = await user_lang(update.effective_user.id)
+    if await _admin_command_guard(update, True):  # stats: owner only
+        lang = ADMIN_LANG
         await update.message.reply_text(await stats_text(lang))
 
 
 async def handle_block_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if await _admin_command_guard(update, False):
-        lang = await user_lang(update.effective_user.id)
+        lang = ADMIN_LANG
         if not context.args:
             await update.message.reply_text(t(lang, "usage_block"))
             return
@@ -1913,7 +1969,7 @@ async def handle_block_command(update: Update, context: ContextTypes.DEFAULT_TYP
 
 async def handle_unblock_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if await _admin_command_guard(update, True):
-        lang = await user_lang(update.effective_user.id)
+        lang = ADMIN_LANG
         if not context.args:
             await update.message.reply_text(t(lang, "usage_unblock"))
             return
@@ -1923,7 +1979,7 @@ async def handle_unblock_command(update: Update, context: ContextTypes.DEFAULT_T
 
 async def handle_addadmin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if await _admin_command_guard(update, True):
-        lang = await user_lang(update.effective_user.id)
+        lang = ADMIN_LANG
         if not context.args:
             await update.message.reply_text(t(lang, "usage_addadmin"))
             return
@@ -1934,7 +1990,7 @@ async def handle_addadmin_command(update: Update, context: ContextTypes.DEFAULT_
 
 async def handle_removeadmin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if await _admin_command_guard(update, True):
-        lang = await user_lang(update.effective_user.id)
+        lang = ADMIN_LANG
         username = parse_username(context.args[0]) if context.args else None
         if not username:
             await update.message.reply_text(t(lang, "usage_removeadmin"))
@@ -2099,6 +2155,7 @@ def build_application():
         (r"^j:", handle_journal),
         (r"^adm:", handle_admin),
         (r"^bc:", handle_broadcast),
+        (r"^ainv:", handle_admin_invite),
         (r"^blk:", handle_block_button),
     ):
         application.add_handler(CallbackQueryHandler(handler, pattern=pattern))
@@ -2129,7 +2186,16 @@ async def main():
         max_inactive_connection_lifetime=60,
     )
     async with pool.acquire() as conn:
+        had_accept = await conn.fetchval(
+            "SELECT 1 FROM information_schema.columns "
+            "WHERE table_name = 'admins' AND column_name = 'accepted_at'"
+        )
         await conn.execute(SCHEMA)
+        if not had_accept:
+            # One-time: admins who were already active before invitations existed.
+            await conn.execute(
+                "UPDATE admins SET accepted_at = created_at WHERE user_id IS NOT NULL"
+            )
         try:
             await conn.execute(
                 "CREATE UNIQUE INDEX IF NOT EXISTS users_anon_code_uidx ON users (anon_code)"
