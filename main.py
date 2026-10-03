@@ -366,23 +366,26 @@ FEELING_LABELS = {
     },
 }  # fmt: skip
 
-LORDS_PRAYER_TEXT = (
-    "🙏 The Lord's Prayer\n\n"
-    "English:\n"
-    "Our Father, who art in heaven, hallowed be thy name.\n"
-    "Thy kingdom come, thy will be done, on earth as it is in heaven.\n"
-    "Give us this day our daily bread.\n"
-    "And forgive us our trespasses, as we forgive those who trespass against us.\n"
-    "And lead us not into temptation, but deliver us from evil.\n"
-    "For thine is the kingdom, and the power, and the glory, forever. Amen.\n\n"
-    "አማርኛ:\n"
-    "በሰማያት የምትኖር አባታችን ሆይ፤ ስምህ ይቀደስ።\n"
-    "መንግሥትህ ትምጣ፤ ፈቃድህ በሰማይ እንደሆነች እንዲሁም በምድር ትሁን።\n"
-    "የዕለት እንጀራችንን ዛሬ ስጠን።\n"
-    "እኛም የበደሉንን ይቅር እንደምንል፥ በደላችንን ይቅር በለን።\n"
-    "ከፈተና አታግባን እንጂ፥ ከክፉ አድንህ እንጂ።\n"
-    "መንግሥት ያንተ ናትና፥ ኃይልም ክብርም ለዘላለም አሜን።"
-)
+LORDS_PRAYER_TEXT = {
+    "en": (
+        "🙏 The Lord's Prayer\n\n"
+        "Our Father, who art in heaven, hallowed be thy name.\n"
+        "Thy kingdom come, thy will be done, on earth as it is in heaven.\n"
+        "Give us this day our daily bread.\n"
+        "And forgive us our trespasses, as we forgive those who trespass against us.\n"
+        "And lead us not into temptation, but deliver us from evil.\n"
+        "For thine is the kingdom, and the power, and the glory, forever. Amen."
+    ),
+    "am": (
+        "🙏 የጌታ ጸሎት\n\n"
+        "በሰማያት የምትኖር አባታችን ሆይ፤ ስምህ ይቀደስ።\n"
+        "መንግሥትህ ትምጣ፤ ፈቃድህ በሰማይ እንደሆነች እንዲሁም በምድር ትሁን።\n"
+        "የዕለት እንጀራችንን ዛሬ ስጠን።\n"
+        "እኛም የበደሉንን ይቅር እንደምንል፥ በደላችንን ይቅር በለን።\n"
+        "ከፈተና አታግባን እንጂ፥ ከክፉ አድነን እንጂ።\n"
+        "መንግሥት ያንተ ናትና፥ ኃይልም ክብርም ለዘላለም አሜን።"
+    ),
+}
 
 
 def t(lang: str, key: str, **kwargs) -> str:
@@ -766,7 +769,7 @@ async def handle_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif action == "language":
         await show(query, LANG_PROMPT, language_keyboard())
     elif action == "lords":
-        await show(query, LORDS_PRAYER_TEXT, kb(menu_row(lang)))
+        await show(query, LORDS_PRAYER_TEXT[lang], kb(menu_row(lang)))
     elif action == "reminders":
         await show_reminders(query, user, lang)
 
