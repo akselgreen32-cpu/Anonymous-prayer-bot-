@@ -1127,7 +1127,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         albums[group] = {"first": message.message_id, "ids": [message.message_id], "ts": now}
 
     if user["state"]:
-        await handle_state_message(update, user, lang)
+        await handle_state_message(update, context, user, lang)
         return
 
     if user["blocked"]:
@@ -1281,7 +1281,7 @@ async def handle_unsupported(update: Update, context: ContextTypes.DEFAULT_TYPE)
 # ---------------------------------------------------------------------------
 # Text typed while the bot is waiting for something (journal entry, admin input)
 # ---------------------------------------------------------------------------
-async def handle_state_message(update: Update, user, lang: str):
+async def handle_state_message(update: Update, context: ContextTypes.DEFAULT_TYPE, user, lang: str):
     message = update.message
     uid = update.effective_user.id
     state = user["state"]
