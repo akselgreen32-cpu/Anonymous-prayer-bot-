@@ -1,4 +1,5 @@
 import os
+import math
 import re
 import json
 import time
@@ -12,6 +13,7 @@ from datetime import date, datetime, timedelta, timezone
 from datetime import time as dtime
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
+from xml.sax.saxutils import escape as xml_escape
 
 import asyncpg
 import uvicorn
@@ -51,6 +53,28 @@ DATABASE_URL = os.environ["DATABASE_URL"]  # Neon connection string
 # Any long random secret. It encrypts journal entries. Keep it safe: if it is
 # lost or changed, existing journal entries can no longer be read.
 JOURNAL_SECRET = os.environ["JOURNAL_SECRET"]
+
+# ---------------------------------------------------------------------------
+# Keep secrets out of the logs. The HTTP library prints every Telegram call
+# (the URL contains the bot token), so it is silenced, and as a safety net any
+# secret that still reaches a log line (even inside an error traceback) is
+# replaced before it is printed.
+# ---------------------------------------------------------------------------
+class RedactingFormatter(logging.Formatter):
+    SECRETS = [x for x in (BOT_TOKEN, JOURNAL_SECRET, DATABASE_URL) if x]
+
+    def format(self, record):
+        text = super().format(record)
+        for secret in self.SECRETS:
+            text = text.replace(secret, "<hidden>")
+        return text
+
+
+for _handler in logging.getLogger().handlers:
+    _handler.setFormatter(RedactingFormatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s"))
+for _noisy in ("httpx", "httpcore"):
+    logging.getLogger(_noisy).setLevel(logging.WARNING)
+
 # Base prayer team (also admins). Comma-separated Telegram IDs.
 RECIPIENT_IDS = [int(i) for i in os.environ["MY_USER_ID"].split(",") if i.strip()]
 # The ultimate admin. Defaults to the first ID in MY_USER_ID.
@@ -266,6 +290,7 @@ TEXTS = {
         "b_refresh": "🔄 Refresh",
         "b_text_view": "📝 Text",
         "b_image_view": "🖼 Picture",
+        "b_svg_view": "🎨 SVG",
         "b_panel": "⬅️ Admin panel",
         "b_blocked": "🚫 Blocked senders",
         "b_block_code": "🚫 Block a code",
@@ -1831,32 +1856,309 @@ def render_stats_png(d: dict) -> bytes:
     return buf.getvalue()
 
 
-async def send_stats(bot, chat_id: int, as_text: bool = False):
-    """Send the dashboard as a picture (or as text). Falls back to text if the
-    picture can't be made, for example when Pillow isn't installed."""
+# ---------------------------------------------------------------------------
+# SVG dashboard. The DESIGN lives in stats_template.svg (open it in a browser or
+# Inkscape to restyle it); the numbers are filled in here. Each chart below draws
+# inside its card with coordinates relative to the card's top-left corner, so if
+# you resize a card in the template, adjust the matching function.
+# ---------------------------------------------------------------------------
+SVG_TEMPLATE_PATH = Path(__file__).with_name("stats_template.svg")
+_PLACEHOLDER = re.compile(r"\{\{([A-Z0-9_]+)\}\}")
+TYPE_ORDER = [
+    ("text", "Text"), ("photo", "Photo"), ("voice", "Voice"), ("video", "Video"),
+    ("video_note", "Round"), ("audio", "Audio"), ("animation", "GIF"), ("document", "File"),
+]  # fmt: skip
+TYPE_COLORS = ["#60C3FA", "#C77DFF", "#5EEAA0", "#FDD35C", "#FB8BA0", "#5EEAD4", "#FDBA74", "#A9B8CC"]
+CATEGORY_GRADIENTS = {
+    "health": "gRose", "family": "gAmber", "school": "gBlue",
+    "work": "gGreen", "spiritual": "gPurple", "other": "gGray",
+}  # fmt: skip
+SVG_TRACK = "#0E182A"
+
+
+def _x(value) -> str:
+    return xml_escape(str(value))
+
+
+def _fit(text: str, big: int) -> int:
+    """Font size that keeps a number inside its tile: long numbers get smaller."""
+    n = len(text)
+    return big if n <= 5 else round(big * 0.82) if n <= 7 else round(big * 0.68) if n <= 9 else round(big * 0.54)
+
+
+def _compact_int(n: int) -> str:
+    """1,234 stays as it is; 12,345 becomes 12.3K; 1,200,000 becomes 1.2M."""
+    if n >= 1_000_000:
+        return f"{n / 1_000_000:.1f}M".replace(".0M", "M")
+    if n >= 10_000:
+        return f"{n / 1_000:.1f}K".replace(".0K", "K")
+    return f"{n:,}"
+
+
+def _compact_avg(x: float) -> str:
+    return _compact_int(round(x)) if x >= 1000 else f"{x:.1f}"
+
+
+def _pct_of(n: int, total: int) -> int:
+    return round(100 * n / total) if total else 0
+
+
+def _svg_week_chart(d: dict) -> str:
+    """Card 984 x 400: one bar per day, today highlighted, dashed average line."""
+    days, peak, today = d["days"], d["peak"], d["now"].date()
+    avg = d["week_total"] / 7
+    pad, col_w, bar_w, base, max_h = 44, 128, 64, 310, 210
+    out = [
+        f'<text x="{pad}" y="56" font-size="22" font-weight="600" fill="#C9D6E5">Prayer requests per day</text>',
+        '<line x1="672" y1="50" x2="712" y2="50" stroke="#FBBF24" stroke-width="3" stroke-dasharray="6 6" stroke-linecap="round"/>',
+        f'<text x="724" y="57" font-size="19" fill="#FDD35C">avg {_compact_avg(avg)} / day</text>',
+    ]
+    for i, (day, n) in enumerate(days):
+        cx = pad + col_w * i + col_w / 2
+        is_today = day == today
+        out.append(
+            f'<rect x="{cx - bar_w / 2:.1f}" y="{base - max_h}" width="{bar_w}" height="{max_h}" rx="20" fill="{SVG_TRACK}"/>'
+        )
+        if n and peak:
+            h = max(max_h * n / peak, 16)
+            fill = "url(#barToday)" if is_today else "url(#barBlue)"
+            glow = ' filter="url(#glow)"' if is_today else ""
+            out.append(
+                f'<rect x="{cx - bar_w / 2:.1f}" y="{base - h:.1f}" width="{bar_w}" height="{h:.1f}" '
+                f'rx="{min(20, h / 2):.1f}" fill="{fill}"{glow}/>'
+            )
+            out.append(
+                f'<text x="{cx:.1f}" y="{base - h - 14:.1f}" font-size="24" font-weight="700" text-anchor="middle" '
+                f'fill="{"#7DD3FC" if is_today else "#FFFFFF"}">{_compact_int(n)}</text>'
+            )
+        else:
+            out.append(
+                f'<text x="{cx:.1f}" y="{base - 14}" font-size="22" text-anchor="middle" fill="#55687F">0</text>'
+            )
+        out.append(
+            f'<text x="{cx:.1f}" y="{base + 40}" font-size="23" font-weight="{700 if is_today else 500}" '
+            f'text-anchor="middle" fill="{"#7DD3FC" if is_today else "#9FB3C8"}">{_x(day.strftime("%a"))}</text>'
+        )
+        out.append(
+            f'<text x="{cx:.1f}" y="{base + 66}" font-size="18" text-anchor="middle" fill="#6B7F96">{_x(day.strftime("%d"))}</text>'
+        )
+    if peak:
+        y_avg = base - max_h * min(avg / peak, 1)
+        out.append(
+            f'<line x1="{pad}" y1="{y_avg:.1f}" x2="{984 - pad}" y2="{y_avg:.1f}" stroke="#FBBF24" '
+            'stroke-opacity="0.7" stroke-width="2" stroke-dasharray="8 8" stroke-linecap="round"/>'
+        )
+    else:
+        out.append(
+            '<text x="492" y="200" font-size="24" text-anchor="middle" fill="#6B7F96">No requests in the last 7 days</text>'
+        )
+    return "\n    ".join(out)
+
+
+def _svg_category_rows(d: dict) -> str:
+    """Card 588 x 520: all six categories, busiest first, with gradient bars."""
+    counts = dict(d["cats"])
+    total = sum(counts.values())
+    order = sorted(CATEGORIES, key=lambda c: (-counts.get(c, 0), CATEGORIES.index(c)))
+    left, width = 36, 516
+    out = []
+    for i, cat in enumerate(order):
+        n = counts.get(cat, 0)
+        y = 66 + i * 78
+        dim = n == 0
+        out.append(
+            f'<text x="{left}" y="{y}" font-size="25" font-weight="600" fill="{"#6B7F96" if dim else "#E8EEF5"}">{_x(CATEGORY_PLAIN[cat])}</text>'
+        )
+        out.append(
+            f'<text x="{left + width}" y="{y}" font-size="22" text-anchor="end" fill="#9FB3C8">'
+            f'<tspan font-weight="700" fill="{"#6B7F96" if dim else "#FFFFFF"}">{_pct_of(n, total)}%</tspan>  ·  {n:,}</text>'
+        )
+        out.append(f'<rect x="{left}" y="{y + 18}" width="{width}" height="16" rx="8" fill="{SVG_TRACK}"/>')
+        if n:
+            w = max(width * n / total, 16)
+            out.append(
+                f'<rect x="{left}" y="{y + 18}" width="{w:.1f}" height="16" rx="8" fill="url(#{CATEGORY_GRADIENTS[cat]})"/>'
+            )
+    return "\n    ".join(out)
+
+
+def _svg_users_card(d: dict) -> str:
+    """Card 364 x 520: language donut, legend, new-user chips, blocked count."""
+    u = d["users"]
+    total = u["total"]
+    cx, cy, r, stroke = 182, 150, 88, 28
+    circ = 2 * math.pi * r
+    segments = [
+        ("Amharic", u["amharic"], "gBlue", "#60C3FA"),
+        ("English", u["english"], "gPurple", "#C77DFF"),
+        ("No language yet", u["no_lang"], "gGray", "#A9B8CC"),
+    ]
+    out = [f'<circle cx="{cx}" cy="{cy}" r="{r}" fill="none" stroke="{SVG_TRACK}" stroke-width="{stroke}"/>']
+    present = [s for s in segments if s[1] > 0]
+    gap = 7 if len(present) > 1 else 0
+    offset = 0.0
+    for _, n, grad, _color in present:
+        length = circ * n / total
+        out.append(
+            f'<circle cx="{cx}" cy="{cy}" r="{r}" fill="none" stroke="url(#{grad})" stroke-width="{stroke}" '
+            f'stroke-dasharray="{max(length - gap, 0.5):.2f} {circ:.2f}" stroke-dashoffset="{-(offset + gap / 2):.2f}" '
+            f'transform="rotate(-90 {cx} {cy})"/>'
+        )
+        offset += length
+    total_txt = f"{total:,}"
+    out.append(
+        f'<text x="{cx}" y="{cy + 8}" font-size="{_fit(total_txt, 42)}" font-weight="800" text-anchor="middle" fill="#FFFFFF">{total_txt}</text>'
+    )
+    out.append(f'<text x="{cx}" y="{cy + 38}" font-size="19" text-anchor="middle" fill="#8CA0B8">users</text>')
+    for i, (label, n, _grad, color) in enumerate(segments):
+        y = 316 + i * 38
+        out.append(f'<circle cx="44" cy="{y - 7}" r="8" fill="{color}" fill-opacity="{1 if n else 0.35}"/>')
+        out.append(f'<text x="64" y="{y}" font-size="21" fill="{"#C9D6E5" if n else "#6B7F96"}">{_x(label)}</text>')
+        out.append(
+            f'<text x="328" y="{y}" font-size="20" text-anchor="end" fill="#9FB3C8">{_pct_of(n, total)}%  ·  {n:,}</text>'
+        )
+    for x, w, label in ((36, 130, f"+{u['new_today']:,} today"), (178, 150, f"+{u['new_week']:,} / week")):
+        out.append(
+            f'<rect x="{x}" y="424" width="{w}" height="44" rx="22" fill="#22C55E" fill-opacity="0.13" '
+            'stroke="#22C55E" stroke-opacity="0.4" stroke-width="1.5"/>'
+        )
+        out.append(
+            f'<text x="{x + w / 2}" y="453" font-size="19" font-weight="600" text-anchor="middle" fill="#BBF7D0">{_x(label)}</text>'
+        )
+    blocked = u["blocked"]
+    out.append(
+        f'<text x="36" y="498" font-size="19" fill="{"#F87171" if blocked else "#6B7F96"}">Blocked senders: {blocked:,}</text>'
+    )
+    return "\n    ".join(out)
+
+
+def _svg_type_chips(d: dict) -> str:
+    """Card 588 x 220: eight message-type chips (4 per row)."""
+    counts = dict(d["kinds"])
+    out = []
+    for i, (kind, name) in enumerate(TYPE_ORDER):
+        x, y = 32 + (i % 4) * 135, 34 + (i // 4) * 88
+        n = counts.get(kind, 0)
+        count_txt = f"{n:,}"
+        out.append(
+            f'<rect x="{x}" y="{y}" width="119" height="72" rx="18" fill="{SVG_TRACK}" stroke="#22334F" stroke-width="1.5"/>'
+        )
+        out.append(
+            f'<circle cx="{x + 22}" cy="{y + 24}" r="6" fill="{TYPE_COLORS[i]}" fill-opacity="{1 if n else 0.35}"/>'
+        )
+        out.append(f'<text x="{x + 38}" y="{y + 29}" font-size="17" fill="#9FB3C8">{_x(name)}</text>')
+        out.append(
+            f'<text x="{x + 16}" y="{y + 60}" font-size="{_fit(count_txt, 28)}" font-weight="800" '
+            f'fill="{"#FFFFFF" if n else "#55687F"}">{count_txt}</text>'
+        )
+    return "\n    ".join(out)
+
+
+def _svg_sub_bars(d: dict) -> str:
+    """Card 364 x 220: how many users opted in to each reminder."""
+    u = d["users"]
+    total = u["total"]
+    out = []
+    for i, (label, n, grad) in enumerate(
+        (("Daily verse", u["subscribed"], "gBlue"), ("Weekly reflection", u["weekly"], "gPurple"))
+    ):
+        y = 62 + i * 78
+        out.append(f'<text x="32" y="{y}" font-size="21" fill="#E8EEF5">{_x(label)}</text>')
+        out.append(
+            f'<text x="332" y="{y}" font-size="19" text-anchor="end" fill="#9FB3C8">{_pct_of(n, total)}%  ·  {n:,}</text>'
+        )
+        out.append(f'<rect x="32" y="{y + 16}" width="300" height="14" rx="7" fill="{SVG_TRACK}"/>')
+        if n:
+            out.append(
+                f'<rect x="32" y="{y + 16}" width="{max(300 * n / total, 14):.1f}" height="14" rx="7" fill="url(#{grad})"/>'
+            )
+    return "\n    ".join(out)
+
+
+def render_stats_svg(d: dict) -> bytes:
+    """Fill stats_template.svg with the numbers. Raises (so the caller can fall
+    back to the picture or text) if the template is missing, uses a placeholder
+    this code doesn't know, or the result isn't valid XML."""
+    import xml.etree.ElementTree as ET
+
+    template = SVG_TEMPLATE_PATH.read_text(encoding="utf-8")
+    now, req, days = d["now"], d["req"], d["days"]
+
+    def kpi(prefix: str, number: int, sub: str) -> dict:
+        txt = f"{number:,}"
+        return {f"{prefix}": txt, f"{prefix}_FS": str(_fit(txt, 56)), f"{prefix}_SUB": _x(sub)}
+
+    yesterday = days[-2][1] if len(days) >= 2 else 0
+    diff = req["today"] - yesterday
+    if diff == 0:
+        today_sub = "same as yesterday"
+    else:
+        today_sub = f"{'▲ +' if diff > 0 else '▼ -'}{_compact_int(abs(diff))} vs yesterday"
+        if len(today_sub) > 20:  # keep it inside the tile
+            today_sub = today_sub.replace("yesterday", "yday")
+    values = {
+        "DATE": _x(now.strftime("%a %d %b %Y")),
+        "TIME": _x(now.strftime("%H:%M") + " EAT"),
+        **kpi("K_TODAY", req["today"], today_sub),
+        **kpi("K_WEEK", d["week_total"], f"avg {_compact_avg(d['week_total'] / 7)} per day"),
+        **kpi("K_MONTH", req["month"], f"avg {_compact_avg(req['month'] / 30)} per day"),
+        **kpi("K_ALL", req["total"], "since launch"),
+        "WEEK_CHART": _svg_week_chart(d),
+        "CATEGORY_ROWS": _svg_category_rows(d),
+        "USERS_CARD": _svg_users_card(d),
+        "TYPE_CHIPS": _svg_type_chips(d),
+        "SUB_BARS": _svg_sub_bars(d),
+    }
+    svg = _PLACEHOLDER.sub(lambda m: values[m.group(1)], template)  # unknown name -> KeyError
+    ET.fromstring(svg.encode("utf-8"))  # must be well-formed XML
+    return svg.encode("utf-8")
+
+
+STATS_MODES = ("png", "svg", "text")
+STATS_VIEW_LABEL = {"png": "b_image_view", "svg": "b_svg_view", "text": "b_text_view"}
+
+
+def stats_keyboard(mode: str) -> InlineKeyboardMarkup:
+    """Refresh the view you are on, or switch to one of the other two."""
+    row = [btn(t(ADMIN_LANG, "b_refresh"), f"adm:sv:{mode}")] + [
+        btn(t(ADMIN_LANG, STATS_VIEW_LABEL[m]), f"adm:sv:{m}") for m in STATS_MODES if m != mode
+    ]
+    return kb(row, [btn(t(ADMIN_LANG, "b_panel"), "adm:homenew")])
+
+
+async def send_stats(bot, chat_id: int, mode: str = "png"):
+    """Send the dashboard as a picture (png), a designed SVG file (svg) or text.
+    If the chosen view can't be made, fall back: svg -> picture -> text."""
     d = await stats_data()
-    if not as_text:
+    when = d["now"].strftime("%a %d %b, %H:%M")
+    if mode == "svg":
+        try:
+            svg = await asyncio.to_thread(render_stats_svg, d)
+            await bot.send_document(
+                chat_id=chat_id,
+                document=svg,
+                filename=f"prayer-dashboard-{d['now'].strftime('%Y-%m-%d_%H%M')}.svg",
+                caption=f"🎨 Dashboard (SVG) · {when} EAT\nOpen the file in a browser or your gallery to see the design.",
+                reply_markup=stats_keyboard("svg"),
+            )
+            return
+        except Exception:
+            logging.exception("Could not make the SVG dashboard; trying the picture instead")
+            mode = "png"
+    if mode == "png":
         try:
             png = await asyncio.to_thread(render_stats_png, d)
             await bot.send_photo(
                 chat_id=chat_id,
                 photo=png,
-                caption=f"📊 Dashboard · {d['now'].strftime('%a %d %b, %H:%M')} EAT",
-                reply_markup=kb(
-                    [btn(t(ADMIN_LANG, "b_refresh"), "adm:statsr"), btn(t(ADMIN_LANG, "b_text_view"), "adm:statstext")],
-                    [btn(t(ADMIN_LANG, "b_panel"), "adm:homenew")],
-                ),
+                caption=f"📊 Dashboard · {when} EAT",
+                reply_markup=stats_keyboard("png"),
             )
             return
         except Exception:
             logging.exception("Could not make the stats picture; sending text instead")
     await bot.send_message(
-        chat_id=chat_id,
-        text=format_stats_text(d),
-        reply_markup=kb(
-            [btn(t(ADMIN_LANG, "b_image_view"), "adm:statsr")],
-            [btn(t(ADMIN_LANG, "b_panel"), "adm:homenew")],
-        ),
+        chat_id=chat_id, text=format_stats_text(d), reply_markup=stats_keyboard("text")
     )
 
 
@@ -1994,14 +2296,21 @@ async def handle_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text, markup = admin_home(uid, lang)
         await show(query, text, markup)
 
-    elif action in ("stats", "statsr", "statstext"):
+    elif action in ("stats", "sv", "statsr", "statstext"):
         if not await owner_only():
             return
+        # "statsr" and "statstext" are the buttons of dashboards sent by the
+        # previous version; they keep working.
+        mode = {"stats": "png", "statsr": "png", "statstext": "text"}.get(action) or (
+            parts[2] if len(parts) > 2 else "png"
+        )
+        if mode not in STATS_MODES:
+            return
         # From a stats message: take its buttons off first, so a double tap
-        # can't send two copies. The picture arrives as a new message.
+        # can't send two copies. The dashboard arrives as a new message.
         if action != "stats" and not await drop_buttons(query):
             return
-        await send_stats(context.bot, uid, as_text=(action == "statstext"))
+        await send_stats(context.bot, uid, mode)
 
     elif action == "homenew":
         if await drop_buttons(query):
@@ -2225,7 +2534,8 @@ async def _admin_command_guard(update: Update, owner_only: bool) -> bool:
 
 async def handle_stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if await _admin_command_guard(update, True):  # stats: owner only
-        await send_stats(context.bot, update.effective_chat.id)
+        mode = (context.args[0].lower() if context.args else "png")
+        await send_stats(context.bot, update.effective_chat.id, mode if mode in STATS_MODES else "png")
 
 
 async def handle_block_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2503,7 +2813,7 @@ async def main():
         ]
     )
     server = uvicorn.Server(
-        uvicorn.Config(app=web_app, host="0.0.0.0", port=PORT, log_level="info")
+        uvicorn.Config(app=web_app, host="0.0.0.0", port=PORT, log_level="info", access_log=False)
     )
 
     logging.info("Bot is starting with webhook at %s", WEBHOOK_URL)
