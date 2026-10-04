@@ -1,0 +1,301 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  BASE TEMPLATE for the Prayer Bot stats dashboard.
+
+  main.py (render_stats_svg) loads this file and replaces every double-curly-brace
+  placeholder with the real numbers. Everything else is the design, so you can
+  open this file in a browser or in Inkscape/Figma and restyle it freely.
+
+  Rules if you edit it:
+    * Keep the placeholder names, they are matched by name. The bot refuses to
+      build the picture if a placeholder is unknown, and the file must stay
+      valid XML.
+    * Canvas is 1080 x 1830. Each card is a group placed with translate(x,y);
+      the generated charts inside use coordinates relative to that card, so if
+      you resize a card also check the matching function in main.py.
+    * Only widely supported SVG features are used (gradients, rounded
+      rectangles, text, filters), so it opens the same everywhere.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="1830" viewBox="0 0 1080 1830"
+     font-family="Inter, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif" xmlns:c2pa="http://c2pa.org/manifest"><metadata><c2pa:manifest>AAAWgmp1bWIAAAAeanVtZGMycGEAEQAQgAAAqgA4m3EDYzJwYQAAABZcanVtYgAAAEdqdW1kYzJtYQARABCAAACqADibcQN1cm46YzJwYTo3MzdhODI0My01YmZlLTRjNTMtYmJjZC0zZTQ3ODFjODczMGEAAAADl2p1bWIAAAApanVtZGMyYXMAEQAQgAAAqgA4m3EDYzJwYS5hc3NlcnRpb25zAAAAALxqdW1iAAAARGp1bWRjYm9yABEAEIAAAKoAOJtxE2MycGEuaW5ncmVkaWVudC52MwAAAAAYYzJzaAGHgKrYcTYqRK5VwbzimLAAAABwY2JvcqNpZGM6Zm9ybWF0bWltYWdlL3N2Zyt4bWxqaW5zdGFuY2VJRHgseG1wOmlpZDo2NDY3N2U0My04MWE1LTQ2M2MtYjBiNy0yOWVhYjBiMTNjZThscmVsYXRpb25zaGlwaHBhcmVudE9mAAAB4mp1bWIAAABBanVtZGNib3IAEQAQgAAAqgA4m3ETYzJwYS5hY3Rpb25zLnYyAAAAABhjMnNomgknvUpIKN+/h4jnkQDscwAAAZljYm9yomdhY3Rpb25zgqJmYWN0aW9ua2MycGEub3BlbmVkanBhcmFtZXRlcnOha2luZ3JlZGllbnRzgaJjdXJseC1zZWxmI2p1bWJmPWMycGEuYXNzZXJ0aW9ucy9jMnBhLmluZ3JlZGllbnQudjNkaGFzaFggxI8yd7xXjujBm+DSgI/j2JWWIbdu/9MdB7+Dmez3HmSkZmFjdGlvbngdY29tLmFudGhyb3BpYy5jbGF1ZGUucHJvdmlkZWRqcGFyYW1ldGVyc6F4H2NvbS5hbnRocm9waWMub3JpZ2luLWNvbmZpZGVuY2VndW5rbm93bmtkZXNjcmlwdGlvbnhmQ2xhdWRlIHByb3ZpZGVkIHRoaXMgZmlsZSBhdCB0aGUgcmVxdWVzdCBvZiBhIHVzZXIgYW5kIG1heSBoYXZlIGNyZWF0ZWQgb3IgbW9kaWZpZWQgdGhlIGZpbGUgY29udGVudHMubXNvZnR3YXJlQWdlbnShZG5hbWVmQ2xhdWRlcmFsbEFjdGlvbnNJbmNsdWRlZPUAAADIanVtYgAAAEBqdW1kY2JvcgARABCAAACqADibcRNjMnBhLmhhc2guZGF0YQAAAAAYYzJzaL55q6MCaHaQp2foFIDkHZ0AAACAY2JvcqVjYWxnZnNoYTI1NmNwYWRMAAAAAAAAAAAAAAAAZGhhc2hYIGvvtDGpUPR75stuXqTwMS2ffYq3iaN9l0DzCKwnr0zVZG5hbWVuanVtYmYgbWFuaWZlc3RqZXhjbHVzaW9uc4GiZXN0YXJ0GQRtZmxlbmd0aBkeBAAAAj5qdW1iAAAAJ2p1bWRjMmNsABEAEIAAAKoAOJtxA2MycGEuY2xhaW0udjIAAAACD2Nib3KlY2FsZ2ZzaGEyNTZpc2lnbmF0dXJleE1zZWxmI2p1bWJmPS9jMnBhL3VybjpjMnBhOjczN2E4MjQzLTViZmUtNGM1My1iYmNkLTNlNDc4MWM4NzMwYS9jMnBhLnNpZ25hdHVyZWppbnN0YW5jZUlEeCx4bXA6aWlkOjZiOWM1NGI1LTBjNmQtNGI0OC1hZTE3LTc1YTE4ZGI1YmI3NXJjcmVhdGVkX2Fzc2VydGlvbnODomN1cmx4LXNlbGYjanVtYmY9YzJwYS5hc3NlcnRpb25zL2MycGEuaW5ncmVkaWVudC52M2RoYXNoWCDEjzJ3vFeO6MGb4NKAj+PYlZYht27/0x0Hv4OZ7PceZKJjdXJseCpzZWxmI2p1bWJmPWMycGEuYXNzZXJ0aW9ucy9jMnBhLmFjdGlvbnMudjJkaGFzaFggS1zJyngFQZyC0T1/SA26SmorIw+L9tPekU0oH17+O3KiY3VybHgpc2VsZiNqdW1iZj1jMnBhLmFzc2VydGlvbnMvYzJwYS5oYXNoLmRhdGFkaGFzaFggDrl1ND6bf7GbJCILeqgNyogVysBPjiJvLFB91izFIkV0Y2xhaW1fZ2VuZXJhdG9yX2luZm+jZG5hbWVvQW50aHJvcGljIEZpbGVzZ3ZlcnNpb25lMS4wLjBrc3BlY1ZlcnNpb25lMi40LjAAABA4anVtYgAAAChqdW1kYzJjcwARABCAAACqADibcQNjMnBhLnNpZ25hdHVyZQAAABAIY2JvctKEWQISogEmGCFZAgowggIGMIIBjaADAgECAhRA5aAK7sI50L64g/oGQgU9Z1UTADAKBggqhkjOPQQDAzBJMRcwFQYDVQQKEw5BbnRocm9waWMsIFBCQzEuMCwGA1UEAxMlQW50aHJvcGljIENvbnRlbnQgQ3JlZGVudGlhbHMgUm9vdCBDQTAeFw0yNjA4MDcxODQzNTZaFw0yODA4MDYxOTQzNTZaMEQxFzAVBgNVBAoTDkFudGhyb3BpYywgUEJDMSkwJwYDVQQDEyBBbnRocm9waWMgQ2xhdWRlIENvbnRlbnQgU2lnbmluZzBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABJh6CmvLUBgFFNU0vUKlOVtE6djd17L5SuwX0LemFisBM3dkd/3cyjxFA3Qo5S46fX0/ihY0VZ7mfb9KF703t5OjWDBWMA4GA1UdDwEB/wQEAwIHgDAVBgNVHSUEDjAMBgorBgEEAYPoXgIBMAwGA1UdEwEB/wQCMAAwHwYDVR0jBBgwFoAUzlHiBIFOZFsj+OPEz5o+nMHXXMIwCgYIKoZIzj0EAwMDZwAwZAIwMXMdFJ4BetLLVY7ORuE9noqbbAZOZn/aArXyTwFAZfKrPzxF2vPoJNf1+UCdg1XGAjBwX1zd9WGqYkqmL5SFqw1QySjr1zJfpJM9+1rdDwSPLMOPOjKuiXjoU/pUUeG9RwmhY3BhZFkNngAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAPZYQCclGQVyggqNOLQXm+zWjucPB5VMfv2ws9aRz81ZWjzO1M+ZoUFyGH0cfRO+KCw/iw8DYCrMXpVSsZ8TcBZASb8=</c2pa:manifest></metadata>
+  <title>Prayer Bot Dashboard</title>
+  <desc>Prayer requests, users and subscriptions. Numbers only, never any prayer text.</desc>
+
+  <defs>
+    <!-- background -->
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0A1020"/>
+      <stop offset="1" stop-color="#0F192C"/>
+    </linearGradient>
+    <radialGradient id="glowBlue" cx="0.12" cy="0.04" r="0.62">
+      <stop offset="0" stop-color="#3B82F6" stop-opacity="0.34"/>
+      <stop offset="1" stop-color="#3B82F6" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="glowPurple" cx="0.92" cy="0.96" r="0.62">
+      <stop offset="0" stop-color="#8B5CF6" stop-opacity="0.30"/>
+      <stop offset="1" stop-color="#8B5CF6" stop-opacity="0"/>
+    </radialGradient>
+    <pattern id="dots" width="30" height="30" patternUnits="userSpaceOnUse">
+      <circle cx="2" cy="2" r="1.3" fill="#FFFFFF" fill-opacity="0.045"/>
+    </pattern>
+
+    <!-- cards -->
+    <linearGradient id="card" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#18273F"/>
+      <stop offset="1" stop-color="#132036"/>
+    </linearGradient>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="135%" color-interpolation-filters="sRGB">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="16"/>
+      <feOffset dy="12" result="blur"/>
+      <feComponentTransfer><feFuncA type="linear" slope="0.5"/></feComponentTransfer>
+      <feMerge><feMergeNode/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="glow" x="-60%" y="-30%" width="220%" height="160%" color-interpolation-filters="sRGB">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="9" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+
+    <!-- brand colours (horizontal) -->
+    <linearGradient id="gBlue" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#2563EB"/><stop offset="1" stop-color="#60C3FA"/>
+    </linearGradient>
+    <linearGradient id="gPurple" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#7C3AED"/><stop offset="1" stop-color="#C77DFF"/>
+    </linearGradient>
+    <linearGradient id="gGreen" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#16A34A"/><stop offset="1" stop-color="#5EEAA0"/>
+    </linearGradient>
+    <linearGradient id="gAmber" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#F59E0B"/><stop offset="1" stop-color="#FDD35C"/>
+    </linearGradient>
+    <linearGradient id="gGray" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#64748B"/><stop offset="1" stop-color="#A9B8CC"/>
+    </linearGradient>
+    <linearGradient id="gRose" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#E11D48"/><stop offset="1" stop-color="#FB8BA0"/>
+    </linearGradient>
+    <linearGradient id="gOrange" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#EA580C"/><stop offset="1" stop-color="#FDBA74"/>
+    </linearGradient>
+    <linearGradient id="gTeal" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#0D9488"/><stop offset="1" stop-color="#5EEAD4"/>
+    </linearGradient>
+
+    <!-- vertical bars for the 7-day chart -->
+    <linearGradient id="barBlue" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#4C8DF6"/><stop offset="1" stop-color="#2447B8"/>
+    </linearGradient>
+    <linearGradient id="barToday" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#8FE0FF"/><stop offset="1" stop-color="#3B82F6"/>
+    </linearGradient>
+
+    <!-- logo -->
+    <linearGradient id="logo" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#60A5FA"/><stop offset="1" stop-color="#8B5CF6"/>
+    </linearGradient>
+  </defs>
+
+  <!-- ===== background ===== -->
+  <rect width="1080" height="1830" fill="url(#bg)"/>
+  <rect width="1080" height="1830" fill="url(#glowBlue)"/>
+  <rect width="1080" height="1830" fill="url(#glowPurple)"/>
+  <rect width="1080" height="1830" fill="url(#dots)"/>
+
+  <!-- ===== header ===== -->
+  <circle cx="92" cy="104" r="50" fill="#60A5FA" fill-opacity="0.16"/>
+  <circle cx="92" cy="104" r="38" fill="url(#logo)"/>
+  <rect x="86" y="82" width="12" height="44" rx="4" fill="#FFFFFF"/>
+  <rect x="74" y="94" width="36" height="12" rx="4" fill="#FFFFFF"/>
+  <text x="156" y="100" font-size="46" font-weight="700" fill="#FFFFFF">Prayer Bot Dashboard</text>
+  <text x="156" y="142" font-size="23" fill="#8CA0B8">Sun 04 Oct 2026</text>
+
+  <rect x="778" y="74" width="254" height="56" rx="28" fill="#22C55E" fill-opacity="0.13" stroke="#22C55E" stroke-opacity="0.45" stroke-width="1.5"/>
+  <circle cx="808" cy="102" r="7" fill="#4ADE80"/>
+  <text x="826" y="109" font-size="21" font-weight="600" fill="#BBF7D0">Updated 07:43 EAT</text>
+
+  <!-- ===== KPI tiles ===== -->
+  <g transform="translate(48,200)">
+    <rect width="222" height="170" rx="26" fill="url(#card)" stroke="#263A5A" stroke-width="1.5" filter="url(#shadow)"/>
+    <rect x="28" y="0" width="64" height="5" rx="2.5" fill="url(#gBlue)"/>
+    <text x="28" y="54" font-size="19" font-weight="600" letter-spacing="2" fill="#8CA0B8">TODAY</text>
+    <text x="28" y="116" font-size="56" font-weight="800" fill="#7DD3FC">87</text>
+    <text x="28" y="148" font-size="18" fill="#8CA0B8">▲ +87 vs yesterday</text>
+  </g>
+  <g transform="translate(302,200)">
+    <rect width="222" height="170" rx="26" fill="url(#card)" stroke="#263A5A" stroke-width="1.5" filter="url(#shadow)"/>
+    <rect x="28" y="0" width="64" height="5" rx="2.5" fill="url(#gPurple)"/>
+    <text x="28" y="54" font-size="19" font-weight="600" letter-spacing="2" fill="#8CA0B8">LAST 7 DAYS</text>
+    <text x="28" y="116" font-size="56" font-weight="800" fill="#FFFFFF">340</text>
+    <text x="28" y="148" font-size="18" fill="#8CA0B8">avg 48.6 per day</text>
+  </g>
+  <g transform="translate(556,200)">
+    <rect width="222" height="170" rx="26" fill="url(#card)" stroke="#263A5A" stroke-width="1.5" filter="url(#shadow)"/>
+    <rect x="28" y="0" width="64" height="5" rx="2.5" fill="url(#gGreen)"/>
+    <text x="28" y="54" font-size="19" font-weight="600" letter-spacing="2" fill="#8CA0B8">LAST 30 DAYS</text>
+    <text x="28" y="116" font-size="56" font-weight="800" fill="#FFFFFF">2,400</text>
+    <text x="28" y="148" font-size="18" fill="#8CA0B8">avg 80.0 per day</text>
+  </g>
+  <g transform="translate(810,200)">
+    <rect width="222" height="170" rx="26" fill="url(#card)" stroke="#263A5A" stroke-width="1.5" filter="url(#shadow)"/>
+    <rect x="28" y="0" width="64" height="5" rx="2.5" fill="url(#gAmber)"/>
+    <text x="28" y="54" font-size="19" font-weight="600" letter-spacing="2" fill="#8CA0B8">ALL TIME</text>
+    <text x="28" y="116" font-size="46" font-weight="800" fill="#FFFFFF">12,345</text>
+    <text x="28" y="148" font-size="18" fill="#8CA0B8">since launch</text>
+  </g>
+
+  <!-- ===== last 7 days ===== -->
+  <text x="48" y="432" font-size="20" font-weight="700" letter-spacing="3" fill="#7F93A8">LAST 7 DAYS</text>
+  <g transform="translate(48,452)">
+    <rect width="984" height="400" rx="30" fill="url(#card)" stroke="#263A5A" stroke-width="1.5" filter="url(#shadow)"/>
+    <text x="44" y="56" font-size="22" font-weight="600" fill="#C9D6E5">Prayer requests per day</text>
+    <line x1="672" y1="50" x2="712" y2="50" stroke="#FBBF24" stroke-width="3" stroke-dasharray="6 6" stroke-linecap="round"/>
+    <text x="724" y="57" font-size="19" fill="#FDD35C">avg 48.6 / day</text>
+    <rect x="76.0" y="100" width="64" height="210" rx="20" fill="#0E182A"/>
+    <rect x="76.0" y="240.0" width="64" height="70.0" rx="20.0" fill="url(#barBlue)"/>
+    <text x="108.0" y="226.0" font-size="24" font-weight="700" text-anchor="middle" fill="#FFFFFF">30</text>
+    <text x="108.0" y="350" font-size="23" font-weight="500" text-anchor="middle" fill="#9FB3C8">Mon</text>
+    <text x="108.0" y="376" font-size="18" text-anchor="middle" fill="#6B7F96">28</text>
+    <rect x="204.0" y="100" width="64" height="210" rx="20" fill="#0E182A"/>
+    <rect x="204.0" y="181.7" width="64" height="128.3" rx="20.0" fill="url(#barBlue)"/>
+    <text x="236.0" y="167.7" font-size="24" font-weight="700" text-anchor="middle" fill="#FFFFFF">55</text>
+    <text x="236.0" y="350" font-size="23" font-weight="500" text-anchor="middle" fill="#9FB3C8">Tue</text>
+    <text x="236.0" y="376" font-size="18" text-anchor="middle" fill="#6B7F96">29</text>
+    <rect x="332.0" y="100" width="64" height="210" rx="20" fill="#0E182A"/>
+    <rect x="332.0" y="282.0" width="64" height="28.0" rx="14.0" fill="url(#barBlue)"/>
+    <text x="364.0" y="268.0" font-size="24" font-weight="700" text-anchor="middle" fill="#FFFFFF">12</text>
+    <text x="364.0" y="350" font-size="23" font-weight="500" text-anchor="middle" fill="#9FB3C8">Wed</text>
+    <text x="364.0" y="376" font-size="18" text-anchor="middle" fill="#6B7F96">30</text>
+    <rect x="460.0" y="100" width="64" height="210" rx="20" fill="#0E182A"/>
+    <rect x="460.0" y="100.0" width="64" height="210.0" rx="20.0" fill="url(#barBlue)"/>
+    <text x="492.0" y="86.0" font-size="24" font-weight="700" text-anchor="middle" fill="#FFFFFF">90</text>
+    <text x="492.0" y="350" font-size="23" font-weight="500" text-anchor="middle" fill="#9FB3C8">Thu</text>
+    <text x="492.0" y="376" font-size="18" text-anchor="middle" fill="#6B7F96">01</text>
+    <rect x="588.0" y="100" width="64" height="210" rx="20" fill="#0E182A"/>
+    <rect x="588.0" y="156.0" width="64" height="154.0" rx="20.0" fill="url(#barBlue)"/>
+    <text x="620.0" y="142.0" font-size="24" font-weight="700" text-anchor="middle" fill="#FFFFFF">66</text>
+    <text x="620.0" y="350" font-size="23" font-weight="500" text-anchor="middle" fill="#9FB3C8">Fri</text>
+    <text x="620.0" y="376" font-size="18" text-anchor="middle" fill="#6B7F96">02</text>
+    <rect x="716.0" y="100" width="64" height="210" rx="20" fill="#0E182A"/>
+    <text x="748.0" y="296" font-size="22" text-anchor="middle" fill="#55687F">0</text>
+    <text x="748.0" y="350" font-size="23" font-weight="500" text-anchor="middle" fill="#9FB3C8">Sat</text>
+    <text x="748.0" y="376" font-size="18" text-anchor="middle" fill="#6B7F96">03</text>
+    <rect x="844.0" y="100" width="64" height="210" rx="20" fill="#0E182A"/>
+    <rect x="844.0" y="107.0" width="64" height="203.0" rx="20.0" fill="url(#barToday)" filter="url(#glow)"/>
+    <text x="876.0" y="93.0" font-size="24" font-weight="700" text-anchor="middle" fill="#7DD3FC">87</text>
+    <text x="876.0" y="350" font-size="23" font-weight="700" text-anchor="middle" fill="#7DD3FC">Sun</text>
+    <text x="876.0" y="376" font-size="18" text-anchor="middle" fill="#6B7F96">04</text>
+    <line x1="44" y1="196.7" x2="940" y2="196.7" stroke="#FBBF24" stroke-opacity="0.7" stroke-width="2" stroke-dasharray="8 8" stroke-linecap="round"/>
+  </g>
+
+  <!-- ===== categories ===== -->
+  <text x="48" y="912" font-size="20" font-weight="700" letter-spacing="3" fill="#7F93A8">BY CATEGORY</text>
+  <g transform="translate(48,932)">
+    <rect width="588" height="520" rx="30" fill="url(#card)" stroke="#263A5A" stroke-width="1.5" filter="url(#shadow)"/>
+    <text x="36" y="66" font-size="25" font-weight="600" fill="#E8EEF5">Health</text>
+    <text x="552" y="66" font-size="22" text-anchor="end" fill="#9FB3C8"><tspan font-weight="700" fill="#FFFFFF">38%</tspan>  ·  500</text>
+    <rect x="36" y="84" width="516" height="16" rx="8" fill="#0E182A"/>
+    <rect x="36" y="84" width="196.9" height="16" rx="8" fill="url(#gRose)"/>
+    <text x="36" y="144" font-size="25" font-weight="600" fill="#E8EEF5">Family</text>
+    <text x="552" y="144" font-size="22" text-anchor="end" fill="#9FB3C8"><tspan font-weight="700" fill="#FFFFFF">23%</tspan>  ·  300</text>
+    <rect x="36" y="162" width="516" height="16" rx="8" fill="#0E182A"/>
+    <rect x="36" y="162" width="118.2" height="16" rx="8" fill="url(#gAmber)"/>
+    <text x="36" y="222" font-size="25" font-weight="600" fill="#E8EEF5">School / Exams</text>
+    <text x="552" y="222" font-size="22" text-anchor="end" fill="#9FB3C8"><tspan font-weight="700" fill="#FFFFFF">15%</tspan>  ·  200</text>
+    <rect x="36" y="240" width="516" height="16" rx="8" fill="#0E182A"/>
+    <rect x="36" y="240" width="78.8" height="16" rx="8" fill="url(#gBlue)"/>
+    <text x="36" y="300" font-size="25" font-weight="600" fill="#E8EEF5">Work / Money</text>
+    <text x="552" y="300" font-size="22" text-anchor="end" fill="#9FB3C8"><tspan font-weight="700" fill="#FFFFFF">11%</tspan>  ·  150</text>
+    <rect x="36" y="318" width="516" height="16" rx="8" fill="#0E182A"/>
+    <rect x="36" y="318" width="59.1" height="16" rx="8" fill="url(#gGreen)"/>
+    <text x="36" y="378" font-size="25" font-weight="600" fill="#E8EEF5">Spiritual</text>
+    <text x="552" y="378" font-size="22" text-anchor="end" fill="#9FB3C8"><tspan font-weight="700" fill="#FFFFFF">9%</tspan>  ·  120</text>
+    <rect x="36" y="396" width="516" height="16" rx="8" fill="#0E182A"/>
+    <rect x="36" y="396" width="47.3" height="16" rx="8" fill="url(#gPurple)"/>
+    <text x="36" y="456" font-size="25" font-weight="600" fill="#E8EEF5">Other</text>
+    <text x="552" y="456" font-size="22" text-anchor="end" fill="#9FB3C8"><tspan font-weight="700" fill="#FFFFFF">3%</tspan>  ·  40</text>
+    <rect x="36" y="474" width="516" height="16" rx="8" fill="#0E182A"/>
+    <rect x="36" y="474" width="16.0" height="16" rx="8" fill="url(#gGray)"/>
+  </g>
+
+  <!-- ===== users ===== -->
+  <text x="668" y="912" font-size="20" font-weight="700" letter-spacing="3" fill="#7F93A8">USERS</text>
+  <g transform="translate(668,932)">
+    <rect width="364" height="520" rx="30" fill="url(#card)" stroke="#263A5A" stroke-width="1.5" filter="url(#shadow)"/>
+    <circle cx="182" cy="150" r="88" fill="none" stroke="#0E182A" stroke-width="28"/>
+    <circle cx="182" cy="150" r="88" fill="none" stroke="url(#gBlue)" stroke-width="28" stroke-dasharray="346.87 552.92" stroke-dashoffset="-3.50" transform="rotate(-90 182 150)"/>
+    <circle cx="182" cy="150" r="88" fill="none" stroke="url(#gPurple)" stroke-width="28" stroke-dasharray="180.99 552.92" stroke-dashoffset="-357.37" transform="rotate(-90 182 150)"/>
+    <circle cx="182" cy="150" r="88" fill="none" stroke="url(#gGray)" stroke-width="28" stroke-dasharray="4.06 552.92" stroke-dashoffset="-545.36" transform="rotate(-90 182 150)"/>
+    <text x="182" y="158" font-size="42" font-weight="800" text-anchor="middle" fill="#FFFFFF">5,000</text>
+    <text x="182" y="188" font-size="19" text-anchor="middle" fill="#8CA0B8">users</text>
+    <circle cx="44" cy="309" r="8" fill="#60C3FA" fill-opacity="1"/>
+    <text x="64" y="316" font-size="21" fill="#C9D6E5">Amharic</text>
+    <text x="328" y="316" font-size="20" text-anchor="end" fill="#9FB3C8">64%  ·  3,200</text>
+    <circle cx="44" cy="347" r="8" fill="#C77DFF" fill-opacity="1"/>
+    <text x="64" y="354" font-size="21" fill="#C9D6E5">English</text>
+    <text x="328" y="354" font-size="20" text-anchor="end" fill="#9FB3C8">34%  ·  1,700</text>
+    <circle cx="44" cy="385" r="8" fill="#A9B8CC" fill-opacity="1"/>
+    <text x="64" y="392" font-size="21" fill="#C9D6E5">No language yet</text>
+    <text x="328" y="392" font-size="20" text-anchor="end" fill="#9FB3C8">2%  ·  100</text>
+    <rect x="36" y="424" width="130" height="44" rx="22" fill="#22C55E" fill-opacity="0.13" stroke="#22C55E" stroke-opacity="0.4" stroke-width="1.5"/>
+    <text x="101.0" y="453" font-size="19" font-weight="600" text-anchor="middle" fill="#BBF7D0">+12 today</text>
+    <rect x="178" y="424" width="150" height="44" rx="22" fill="#22C55E" fill-opacity="0.13" stroke="#22C55E" stroke-opacity="0.4" stroke-width="1.5"/>
+    <text x="253.0" y="453" font-size="19" font-weight="600" text-anchor="middle" fill="#BBF7D0">+140 / week</text>
+    <text x="36" y="498" font-size="19" fill="#F87171">Blocked senders: 7</text>
+  </g>
+
+  <!-- ===== message types ===== -->
+  <text x="48" y="1504" font-size="20" font-weight="700" letter-spacing="3" fill="#7F93A8">MESSAGE TYPES</text>
+  <g transform="translate(48,1524)">
+    <rect width="588" height="220" rx="30" fill="url(#card)" stroke="#263A5A" stroke-width="1.5" filter="url(#shadow)"/>
+    <rect x="32" y="34" width="119" height="72" rx="18" fill="#0E182A" stroke="#22334F" stroke-width="1.5"/>
+    <circle cx="54" cy="58" r="6" fill="#60C3FA" fill-opacity="1"/>
+    <text x="70" y="63" font-size="17" fill="#9FB3C8">Text</text>
+    <text x="48" y="94" font-size="28" font-weight="800" fill="#FFFFFF">900</text>
+    <rect x="167" y="34" width="119" height="72" rx="18" fill="#0E182A" stroke="#22334F" stroke-width="1.5"/>
+    <circle cx="189" cy="58" r="6" fill="#C77DFF" fill-opacity="1"/>
+    <text x="205" y="63" font-size="17" fill="#9FB3C8">Photo</text>
+    <text x="183" y="94" font-size="28" font-weight="800" fill="#FFFFFF">100</text>
+    <rect x="302" y="34" width="119" height="72" rx="18" fill="#0E182A" stroke="#22334F" stroke-width="1.5"/>
+    <circle cx="324" cy="58" r="6" fill="#5EEAA0" fill-opacity="1"/>
+    <text x="340" y="63" font-size="17" fill="#9FB3C8">Voice</text>
+    <text x="318" y="94" font-size="28" font-weight="800" fill="#FFFFFF">80</text>
+    <rect x="437" y="34" width="119" height="72" rx="18" fill="#0E182A" stroke="#22334F" stroke-width="1.5"/>
+    <circle cx="459" cy="58" r="6" fill="#FDD35C" fill-opacity="1"/>
+    <text x="475" y="63" font-size="17" fill="#9FB3C8">Video</text>
+    <text x="453" y="94" font-size="28" font-weight="800" fill="#FFFFFF">20</text>
+    <rect x="32" y="122" width="119" height="72" rx="18" fill="#0E182A" stroke="#22334F" stroke-width="1.5"/>
+    <circle cx="54" cy="146" r="6" fill="#FB8BA0" fill-opacity="1"/>
+    <text x="70" y="151" font-size="17" fill="#9FB3C8">Round</text>
+    <text x="48" y="182" font-size="28" font-weight="800" fill="#FFFFFF">2</text>
+    <rect x="167" y="122" width="119" height="72" rx="18" fill="#0E182A" stroke="#22334F" stroke-width="1.5"/>
+    <circle cx="189" cy="146" r="6" fill="#5EEAD4" fill-opacity="1"/>
+    <text x="205" y="151" font-size="17" fill="#9FB3C8">Audio</text>
+    <text x="183" y="182" font-size="28" font-weight="800" fill="#FFFFFF">5</text>
+    <rect x="302" y="122" width="119" height="72" rx="18" fill="#0E182A" stroke="#22334F" stroke-width="1.5"/>
+    <circle cx="324" cy="146" r="6" fill="#FDBA74" fill-opacity="0.35"/>
+    <text x="340" y="151" font-size="17" fill="#9FB3C8">GIF</text>
+    <text x="318" y="182" font-size="28" font-weight="800" fill="#55687F">0</text>
+    <rect x="437" y="122" width="119" height="72" rx="18" fill="#0E182A" stroke="#22334F" stroke-width="1.5"/>
+    <circle cx="459" cy="146" r="6" fill="#A9B8CC" fill-opacity="1"/>
+    <text x="475" y="151" font-size="17" fill="#9FB3C8">File</text>
+    <text x="453" y="182" font-size="28" font-weight="800" fill="#FFFFFF">3</text>
+  </g>
+
+  <!-- ===== subscriptions ===== -->
+  <text x="668" y="1504" font-size="20" font-weight="700" letter-spacing="3" fill="#7F93A8">SUBSCRIPTIONS</text>
+  <g transform="translate(668,1524)">
+    <rect width="364" height="220" rx="30" fill="url(#card)" stroke="#263A5A" stroke-width="1.5" filter="url(#shadow)"/>
+    <text x="32" y="62" font-size="21" fill="#E8EEF5">Daily verse</text>
+    <text x="332" y="62" font-size="19" text-anchor="end" fill="#9FB3C8">18%  ·  900</text>
+    <rect x="32" y="78" width="300" height="14" rx="7" fill="#0E182A"/>
+    <rect x="32" y="78" width="54.0" height="14" rx="7" fill="url(#gBlue)"/>
+    <text x="32" y="140" font-size="21" fill="#E8EEF5">Weekly reflection</text>
+    <text x="332" y="140" font-size="19" text-anchor="end" fill="#9FB3C8">8%  ·  400</text>
+    <rect x="32" y="156" width="300" height="14" rx="7" fill="#0E182A"/>
+    <rect x="32" y="156" width="24.0" height="14" rx="7" fill="url(#gPurple)"/>
+  </g>
+
+  <!-- ===== footer ===== -->
+  <line x1="48" y1="1782" x2="1032" y2="1782" stroke="#22334F" stroke-width="1.5"/>
+  <text x="540" y="1814" font-size="18" text-anchor="middle" fill="#6B7F96">Anonymous Prayer bot  ·  owner dashboard  ·  numbers only, never prayer text</text>
+</svg>
