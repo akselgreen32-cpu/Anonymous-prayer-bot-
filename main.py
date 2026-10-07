@@ -1,4 +1,5 @@
 import os
+import sys
 import math
 import re
 import json
@@ -233,6 +234,10 @@ TEXTS = {
         ),
         "on": "ON ✅",
         "off": "OFF",
+        "reminders_note": (
+            "🔔 A daily verse (6:30 AM) and a weekly reflection (Sunday evening) are switched on "
+            "for you. You can turn them off any time under Reminders."
+        ),
         "reminder": (
             "🌅 Good morning! Take a moment to pray today.\n\n{verse}"
         ),
@@ -430,6 +435,10 @@ TEXTS = {
         ),
         "on": "በርቷል ✅",
         "off": "ጠፍቷል",
+        "reminders_note": (
+            "🔔 የዕለት ጥቅስ (ጠዋት 12:30) እና የሳምንት ነጸብራቅ (እሑድ ማታ) ለእርስዎ በርተዋል። "
+            "በማንኛውም ጊዜ በ“የጥሞና ግዜ ማንቂያ” ውስጥ ማጥፋት ይችላሉ።"
+        ),
         "reminder": (
             "🌅 እንደምን አደሩ! ዛሬ ለጸሎት ጥቂት ጊዜ ይውሰዱ።\n\n{verse}"
         ),
@@ -624,6 +633,10 @@ CREATE TABLE IF NOT EXISTS users (
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 ALTER TABLE users ADD COLUMN IF NOT EXISTS weekly BOOLEAN NOT NULL DEFAULT FALSE;
+-- New users get the daily verse and the weekly reflection switched on. SET DEFAULT only
+-- affects rows created from now on; nobody who already exists is switched on.
+ALTER TABLE users ALTER COLUMN subscribed SET DEFAULT TRUE;
+ALTER TABLE users ALTER COLUMN weekly SET DEFAULT TRUE;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS state TEXT;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS state_at TIMESTAMPTZ;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS uname_hash TEXT;
@@ -1004,13 +1017,21 @@ async def handle_lang_choice(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await query.answer()
     if lang not in TEXTS:
         return
-    await get_user(query.from_user)
+    user = await get_user(query.from_user)
+    first_time = user["lang"] is None
     await db(
         "execute", "UPDATE users SET lang = $2 WHERE user_id = $1", query.from_user.id, lang
     )
     await show(
         query, t(lang, "welcome"), menu_keyboard(lang, await is_admin(query.from_user.id))
     )
+    if first_time:
+        # Reminders are on by default, so say so once, with a way to change it.
+        await context.bot.send_message(
+            chat_id=query.from_user.id,
+            text=t(lang, "reminders_note"),
+            reply_markup=kb([btn(t(lang, "b_reminders"), "m:reminders")]),
+        )
 
 
 async def handle_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1883,7 +1904,7 @@ def _x(value) -> str:
 def _fit(text: str, big: int) -> int:
     """Font size that keeps a number inside its tile: long numbers get smaller."""
     n = len(text)
-    return big if n <= 5 else round(big * 0.82) if n <= 7 else round(big * 0.68) if n <= 9 else round(big * 0.54)
+    return big if n <= 4 else round(big * 0.84) if n <= 6 else round(big * 0.68) if n <= 8 else round(big * 0.54)
 
 
 def _compact_int(n: int) -> str:
@@ -1991,7 +2012,7 @@ def _svg_users_card(d: dict) -> str:
     segments = [
         ("Amharic", u["amharic"], "gBlue", "#60C3FA"),
         ("English", u["english"], "gPurple", "#C77DFF"),
-        ("No language yet", u["no_lang"], "gGray", "#A9B8CC"),
+        ("No language", u["no_lang"], "gGray", "#A9B8CC"),
     ]
     out = [f'<circle cx="{cx}" cy="{cy}" r="{r}" fill="none" stroke="{SVG_TRACK}" stroke-width="{stroke}"/>']
     present = [s for s in segments if s[1] > 0]
@@ -2098,7 +2119,7 @@ def render_stats_svg(d: dict) -> bytes:
             today_sub = today_sub.replace("yesterday", "yday")
     values = {
         "DATE": _x(now.strftime("%a %d %b %Y")),
-        "TIME": _x(now.strftime("%H:%M") + " EAT"),
+        "TIME": _x(now.strftime("%H:%M")),  # no "EAT": the wider shipped font would spill out of the pill
         **kpi("K_TODAY", req["today"], today_sub),
         **kpi("K_WEEK", d["week_total"], f"avg {_compact_avg(d['week_total'] / 7)} per day"),
         **kpi("K_MONTH", req["month"], f"avg {_compact_avg(req['month'] / 30)} per day"),
@@ -2114,21 +2135,62 @@ def render_stats_svg(d: dict) -> bytes:
     return svg.encode("utf-8")
 
 
-STATS_MODES = ("png", "svg", "text")
+STATS_MODES = ("png", "svg", "text")  # every view the bot can send
+STATS_BUTTON_MODES = ("png", "text")  # the views that have a button ("svg" only via /stats svg)
 STATS_VIEW_LABEL = {"png": "b_image_view", "svg": "b_svg_view", "text": "b_text_view"}
+FONT_DIRS = [Path(__file__).with_name("fonts"), Path(__file__).parent]
+
+
+# Drawing the picture takes a couple of seconds of pure CPU, and the renderer does not let go of
+# Python while it works, so it runs in its own small process. Otherwise the whole bot (every
+# button press, UptimeRobot's health check) would freeze until the picture was finished.
+_RENDER_CHILD = (
+    "import sys, json, resvg_py\n"
+    "job = json.loads(sys.stdin.buffer.read())\n"
+    "png = resvg_py.svg_to_bytes(svg_string=job['svg'], font_files=job['fonts'], skip_system_fonts=True,\n"
+    "    font_family='DejaVu Sans', sans_serif_family='DejaVu Sans', width=1080)\n"
+    "sys.stdout.buffer.write(bytes(png))\n"
+)
+RENDER_TIMEOUT_SECONDS = 90
+
+
+async def render_stats_picture(d: dict) -> bytes:
+    """The SVG dashboard design drawn as a PNG picture (what the Picture view sends).
+    Uses resvg (no system libraries needed) and the DejaVu fonts shipped with the bot,
+    so the text looks the same on any server. Raises if resvg, the fonts or the template
+    are missing, and the caller falls back to the simpler Pillow picture."""
+    fonts = sorted({p.name: str(p) for folder in FONT_DIRS for p in folder.glob("*.ttf")}.values())
+    if not fonts:
+        raise FileNotFoundError("no .ttf fonts found (expected a fonts/ folder next to main.py)")
+    svg = render_stats_svg(d).decode("utf-8")
+    job = json.dumps({"svg": svg, "fonts": fonts}).encode("utf-8")
+    proc = await asyncio.create_subprocess_exec(
+        sys.executable, "-c", _RENDER_CHILD,
+        stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+    )  # fmt: skip
+    try:
+        out, err = await asyncio.wait_for(proc.communicate(job), timeout=RENDER_TIMEOUT_SECONDS)
+    except asyncio.TimeoutError:
+        proc.kill()
+        await proc.wait()
+        raise RuntimeError(f"picture renderer took longer than {RENDER_TIMEOUT_SECONDS}s")
+    if proc.returncode != 0 or not out.startswith(b"\x89PNG"):
+        raise RuntimeError(f"picture renderer failed: {err.decode('utf-8', 'replace')[-300:]}")
+    return out
 
 
 def stats_keyboard(mode: str) -> InlineKeyboardMarkup:
-    """Refresh the view you are on, or switch to one of the other two."""
+    """Refresh the view you are on, or switch to the other one (Picture or Text)."""
     row = [btn(t(ADMIN_LANG, "b_refresh"), f"adm:sv:{mode}")] + [
-        btn(t(ADMIN_LANG, STATS_VIEW_LABEL[m]), f"adm:sv:{m}") for m in STATS_MODES if m != mode
+        btn(t(ADMIN_LANG, STATS_VIEW_LABEL[m]), f"adm:sv:{m}") for m in STATS_BUTTON_MODES if m != mode
     ]
     return kb(row, [btn(t(ADMIN_LANG, "b_panel"), "adm:homenew")])
 
 
 async def send_stats(bot, chat_id: int, mode: str = "png"):
-    """Send the dashboard as a picture (png), a designed SVG file (svg) or text.
-    If the chosen view can't be made, fall back: svg -> picture -> text."""
+    """Send the dashboard as a picture (png: the SVG design drawn as an image), text, or,
+    only through /stats svg, the SVG file itself.
+    If the chosen view can't be made, fall back: svg file -> picture -> simple picture -> text."""
     d = await stats_data()
     when = d["now"].strftime("%a %d %b, %H:%M")
     if mode == "svg":
@@ -2146,17 +2208,21 @@ async def send_stats(bot, chat_id: int, mode: str = "png"):
             logging.exception("Could not make the SVG dashboard; trying the picture instead")
             mode = "png"
     if mode == "png":
-        try:
-            png = await asyncio.to_thread(render_stats_png, d)
-            await bot.send_photo(
-                chat_id=chat_id,
-                photo=png,
-                caption=f"📊 Dashboard · {when} EAT",
-                reply_markup=stats_keyboard("png"),
-            )
-            return
-        except Exception:
-            logging.exception("Could not make the stats picture; sending text instead")
+        for label in ("SVG design", "simple picture"):
+            try:
+                if label == "SVG design":
+                    png = await render_stats_picture(d)
+                else:
+                    png = await asyncio.to_thread(render_stats_png, d)
+                await bot.send_photo(
+                    chat_id=chat_id,
+                    photo=png,
+                    caption=f"📊 Dashboard · {when} EAT",
+                    reply_markup=stats_keyboard("png"),
+                )
+                return
+            except Exception:
+                logging.exception("Could not make the stats picture (%s); trying the next option", label)
     await bot.send_message(
         chat_id=chat_id, text=format_stats_text(d), reply_markup=stats_keyboard("text")
     )
@@ -2590,7 +2656,11 @@ async def handle_removeadmin_command(update: Update, context: ContextTypes.DEFAU
 async def send_daily_reminder(context: ContextTypes.DEFAULT_TYPE):
     """06:30 Ethiopian-standard time: verse for daily-verse subscribers."""
     await purge_expired_admins()
-    rows = await db("fetch", "SELECT user_id, lang FROM users WHERE subscribed AND NOT blocked")
+    rows = await db(
+        "fetch",
+        # Only people who finished choosing a language (reminders are on by default).
+        "SELECT user_id, lang FROM users WHERE subscribed AND NOT blocked AND lang IS NOT NULL",
+    )
     logging.info("Sending daily verse to %d subscribers", len(rows))
     for row in rows:
         lang = row["lang"] or "en"
@@ -2617,7 +2687,7 @@ async def send_weekly_reflection(context: ContextTypes.DEFAULT_TYPE):
                count(j.id) FILTER (WHERE j.answered_at >= now() - interval '7 days') AS answered,
                count(j.id) FILTER (WHERE j.answered_at IS NULL) AS open
         FROM users u LEFT JOIN journal j ON j.user_id = u.user_id
-        WHERE u.weekly AND NOT u.blocked
+        WHERE u.weekly AND NOT u.blocked AND u.lang IS NOT NULL
         GROUP BY u.user_id, u.lang
         """,
     )
@@ -2757,6 +2827,41 @@ def build_application():
     return application
 
 
+# ---------------------------------------------------------------------------
+# One-time tasks. Each runs once ever (a marker row remembers it), so a redeploy can
+# never undo what people chose afterwards.
+# ---------------------------------------------------------------------------
+# Switch these on for everyone who already had an account when the reminders became
+# on-by-default (the owner announced it). Edit the list before deploying to change
+# that, for example ("subscribed",) for the daily verse only.
+ENABLE_FOR_EXISTING_USERS = ("subscribed", "weekly")  # subscribed = daily verse
+
+
+async def run_one_time_tasks(conn) -> None:
+    await conn.execute(
+        "CREATE TABLE IF NOT EXISTS one_time_tasks ("
+        "name TEXT PRIMARY KEY, done_at TIMESTAMPTZ NOT NULL DEFAULT now(), note TEXT)"
+    )
+    assert set(ENABLE_FOR_EXISTING_USERS) <= {"subscribed", "weekly"}
+    if not ENABLE_FOR_EXISTING_USERS:
+        return
+    async with conn.transaction():  # if the update fails, the marker is rolled back too
+        first_run = await conn.fetchval(
+            "INSERT INTO one_time_tasks (name) VALUES ('reminders_on_for_existing_users') "
+            "ON CONFLICT DO NOTHING RETURNING name"
+        )
+        if not first_run:
+            return
+        columns = ", ".join(f"{c} = TRUE" for c in ENABLE_FOR_EXISTING_USERS)
+        result = await conn.execute(f"UPDATE users SET {columns} WHERE NOT blocked")
+        changed = int(result.split()[-1])
+        await conn.execute(
+            "UPDATE one_time_tasks SET note = $1 WHERE name = 'reminders_on_for_existing_users'",
+            f"{', '.join(ENABLE_FOR_EXISTING_USERS)} switched on for {changed} existing users",
+        )
+        logging.info("One-time task: %s switched on for %d existing users", ", ".join(ENABLE_FOR_EXISTING_USERS), changed)
+
+
 async def main():
     global pool
     pool = await asyncpg.create_pool(
@@ -2783,6 +2888,7 @@ async def main():
             )
         except asyncpg.PostgresError as e:
             logging.warning("Could not make anon_code unique (duplicate codes exist?): %s", e)
+        await run_one_time_tasks(conn)
 
     application = build_application()
 
