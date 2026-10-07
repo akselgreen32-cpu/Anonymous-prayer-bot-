@@ -3,3 +3,5 @@ asyncpg>=0.30
 cryptography>=42.0
 starlette>=0.37
 uvicorn>=0.30
+Pillow>=10.1
+resvg-py>=0.5
