@@ -12,8 +12,11 @@ Works in English and Amharic.
 - **Private prayer journal**: entries are encrypted, only you can open them.
   Set a reminder to revisit an entry, mark it answered, delete one entry or
   everything.
-- **Reminders** (opt-in): a daily verse at 6:30 AM and a weekly reflection on
-  Sunday evening (Ethiopian time).
+- **Reminders**: a daily verse at 6:30 AM and a weekly reflection on Sunday
+  evening (Ethiopian time). They are **on by default**: new users are told once and can switch them off under
+  Reminders, and everyone who already had an account was switched on once, at the
+  first deploy of this version (see `ENABLE_FOR_EXISTING_USERS` in `main.py`). A
+  marker row makes that happen only once, so later deploys never undo anyone's choice.
 - **Language**: English or Amharic. Amharic users also see the Ethiopian
   calendar and clock.
 - **Help**: `/help` explains the bot and has a Contact the developer button.
@@ -27,7 +30,7 @@ Works in English and Amharic.
   sender with the button under each request, or by code. An admin can quit the
   role at any time.
 - **Owner** (the ultimate admin) can do everything an admin can, plus:
-  - see the **stats dashboard** as a picture, a designed **SVG file**, or text
+  - see the **stats dashboard** as a designed picture, or as text
   - **unblock** senders
   - **add and remove admins** by Telegram @username
   - send an **announcement** to all users or only to daily-verse subscribers,
@@ -44,38 +47,43 @@ Works in English and Amharic.
 | File | What it is |
 |---|---|
 | `main.py` | the bot |
-| `stats_template.svg` | the design of the SVG stats dashboard (see below) |
+| `stats_template.svg` | the design of the stats dashboard (see below) |
+| `fonts/` | the DejaVu Sans fonts used to draw the dashboard picture (the `.ttf` files can also sit next to `main.py`) |
 | `verses.json` | all Bible verses (see below) |
 | `requirements.txt` | Python packages |
 
 ## Stats dashboard (owner only)
-Open **🔧 Admin → 📊 Stats**, or send `/stats`. The dashboard comes in three
-views, and the buttons under it switch between them or refresh the numbers:
+Open **🔧 Admin → 📊 Stats**, or send `/stats`. You get the dashboard as a
+picture, and the buttons under it refresh the numbers or switch to text:
 
 | View | What you get |
 |---|---|
-| 🖼 Picture | a PNG you can read right in the chat (needs `Pillow`) |
-| 🎨 SVG | a `.svg` file with the full designed dashboard. Telegram can't preview SVG, so tap the file and open it in a browser or your gallery |
+| 🖼 Picture | the full designed dashboard from `stats_template.svg`, drawn as an image you can read right in the chat |
 | 📝 Text | the same numbers as text, always available |
 
-`/stats svg` and `/stats text` open a view directly. If a view can't be made
-(for example the template is missing), the bot falls back to the next one
-(SVG, then picture, then text) instead of failing.
+The picture is drawn by `resvg` using the fonts in `fonts/`, in a separate
+small process so the bot never freezes while it works. If something needed for
+it is missing, the bot falls back automatically (designed picture, then a
+simpler Pillow drawing, then text) instead of failing.
 
-The SVG shows today / 7 days / 30 days / all-time requests, a 7-day bar chart
-with the average, requests by category, a language donut with new-user chips,
-message types, and reminder subscriptions. It contains numbers only, never any
-prayer text.
+`/stats text` opens the text view directly. `/stats svg` (not shown as a button)
+sends the raw `.svg` file, which you can open in a browser.
+
+The dashboard shows today / 7 days / 30 days / all-time requests, a 7-day bar
+chart with the average, requests by category, a language donut with new-user
+chips, message types, and reminder subscriptions. It contains numbers only,
+never any prayer text.
 
 **Changing the look:** the design lives in `stats_template.svg`. Open it in a
 browser, Inkscape or Figma and restyle colors, fonts and positions. Keep the
 double-curly-brace placeholders (like `DATE` or `WEEK_CHART` inside the braces)
 as they are: the bot fills them in by name and refuses to build the picture if
-one is unknown or the file stops being valid XML. The charts are drawn inside
-their cards using the card's own top-left corner as the origin, so if you
-resize a card, adjust the matching function in `main.py`
-(`_svg_week_chart`, `_svg_category_rows`, `_svg_users_card`,
-`_svg_type_chips`, `_svg_sub_bars`).
+one is unknown or the file stops being valid XML. The picture is always drawn
+with DejaVu Sans, so text can be a little wider than in your own browser. Leave
+room in text boxes. The charts are drawn inside their cards using the card's own
+top-left corner as the origin, so if you resize a card, adjust the matching
+function in `main.py` (`_svg_week_chart`, `_svg_category_rows`,
+`_svg_users_card`, `_svg_type_chips`, `_svg_sub_bars`).
 
 ## Verses (`verses.json`)
 The verses live in `verses.json`, not in the code. The file must sit next to
