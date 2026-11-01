@@ -84,6 +84,12 @@ PORT = int(os.environ.get("PORT", 8080))
 # Shown under Amharic verses. Leave empty for none.
 AMHARIC_BIBLE_CREDIT = os.environ.get("AMHARIC_BIBLE_CREDIT", "")
 
+# Channel for approved public posts, e.g. -1001234567890 or @mychannel. Empty = feature off.
+CHANNEL_ID = os.environ.get("CHANNEL_ID", "").strip()
+CHANNEL_CHAT = (
+    int(CHANNEL_ID) if CHANNEL_ID.lstrip("-").isdigit() else CHANNEL_ID
+) or None
+
 WEBHOOK_URL = (
     os.environ.get("WEBHOOK_URL") or os.environ.get("RENDER_EXTERNAL_URL") or ""
 ).rstrip("/")
@@ -287,6 +293,47 @@ TEXTS = {
         "b_write_reflection": "✍️ Write a reflection",
         "b_open_journal": "📓 Open journal",
         "b_open_entry": "📄 Open entry",
+        # ---- channel posting ----
+        "preview_channel": (
+            "📝 Preview\n\nCategory: {category}\n\nYour message above will be shared "
+            "anonymously. Choose where it goes:\n\n"
+            "🔒 Prayer team only: only the prayer team sees it.\n"
+            "📢 Channel: after review it may be posted publicly (still anonymous) in the "
+            "channel. Don't include names or private details you wouldn't want public."
+        ),
+        "b_send_private": "🔒 Prayer team only",
+        "b_send_channel": "📢 Post in the channel (after review)",
+        "sent_channel_short": "✅ Sent anonymously. Waiting for review.",
+        "sent_channel": (
+            "Thank you for sharing your prayer request. It was shared anonymously with the "
+            "prayer team, and it is waiting for review to be posted in the channel. "
+            "Even if it isn't posted, it is being prayed for. 🙏\n\n{verse}"
+        ),
+        "ch_posted": "📢 Your prayer request was posted anonymously in the channel. 🙏",
+        "ch_rejected": (
+            "Your request wasn't posted in the channel, but the prayer team has it "
+            "and is praying. 🙏"
+        ),
+        # channel review (owner side, always English)
+        "ch_header": "📢 Channel request · #{code}\n📂 {category}\n🕒 {time}",
+        "ch_ask": "Post this to the channel?",
+        "ch_edited_head": "✏️ Saved. This is the edited version:",
+        "b_ch_approve": "✅ Approve & post",
+        "b_ch_edit": "✏️ Edit text",
+        "b_ch_reject": "❌ Reject",
+        "ch_edit_prompt": (
+            "✏️ Send the new text. For photos, videos, voice messages and files it "
+            "replaces the caption. It will be posted exactly as you send it."
+        ),
+        "ch_edit_unsupported": "Round videos can't have text, so there is nothing to edit.",
+        "ch_edit_too_long": "Too long. The limit here is {n} characters. Send a shorter version.",
+        "ch_posted_owner": "✅ Posted to the channel.",
+        "ch_rejected_owner": "❌ Rejected. The sender was told it wasn't posted. The prayer team still has it.",
+        "ch_gone": "This request was already handled.",
+        "ch_post_failed": (
+            "⚠️ Couldn't post: {err}\n\nCheck that the bot is an admin of the channel "
+            "with permission to post, and that CHANNEL_ID is correct."
+        ),
         # ---- admin panel ----
         "adm_panel": "🔧 Admin panel\n\nYou are: {role}",
         "role_owner": "Owner (full control)",
@@ -486,6 +533,25 @@ TEXTS = {
         "b_write_reflection": "✍️ ነጸብራቅ ጻፍ",
         "b_open_journal": "📓 ማስታወሻ ክፈት",
         "b_open_entry": "📄 ጽሑፉን ክፈት",
+        # ---- channel posting ----
+        "preview_channel": (
+            "📝 የጸሎት ጥያቄዎ\n\nምድብ፦ {category}\n\nከላይ ያለው መልእክትዎ ስምዎ ሳይታወቅ ይላካል። "
+            "የት ይላክ?\n\n"
+            "🔒 ለጸሎት ቡድኑ ብቻ፦ የጸሎት ቡድኑ ብቻ ያየዋል።\n"
+            "📢 ወደ ቻናሉ፦ ከምርመራ በኋላ ስምዎ ሳይታወቅ በቻናሉ ላይ በይፋ ሊለጠፍ ይችላል። "
+            "በይፋ እንዲታወቅ የማይፈልጉትን ስም ወይም የግል መረጃ አያካትቱ።"
+        ),
+        "b_send_private": "🔒 ለጸሎት ቡድኑ ብቻ",
+        "b_send_channel": "📢 በቻናሉ ላይ ይለጠፍ (ከምርመራ በኋላ)",
+        "sent_channel_short": "✅ ማንነትዎ ሳይታወቅ ተልኳል። ምርመራ በመጠበቅ ላይ ነው።",
+        "sent_channel": (
+            "የጸሎት ጥያቄዎን ስላካፈሉን እናመሰግናለን። ማንነትዎ ሳይታወቅ ለጸሎት ቡድኑ ተላልፏል፤ "
+            "በቻናሉ ላይ ለመለጠፍም ምርመራ እየተጠበቀ ነው። ባይለጠፍም እንኳ ስለእርስዎ ይጸለያል። 🙏\n\n{verse}"
+        ),
+        "ch_posted": "📢 የጸሎት ጥያቄዎ ስምዎ ሳይታወቅ በቻናሉ ላይ ተለጥፏል። 🙏",
+        "ch_rejected": (
+            "የጸሎት ጥያቄዎ በቻናሉ ላይ አልተለጠፈም፤ ነገር ግን የጸሎት ቡድኑ ተቀብሎ እየጸለየ ነው። 🙏"
+        ),
         # ---- admin invitation (the admin panel itself is English only) ----
         "admin_now": (
             "🔧 አሁን የዚህ ቦት አስተዳዳሪ ሆነዋል። 🏠 ዋና ማውጫ → 🔧 አስተዳዳሪ ይክፈቱ። "
@@ -667,6 +733,18 @@ CREATE TABLE IF NOT EXISTS journal (
 );
 CREATE INDEX IF NOT EXISTS journal_user_idx ON journal (user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS journal_remind_idx ON journal (remind_at) WHERE remind_at IS NOT NULL;
+CREATE TABLE IF NOT EXISTS channel_posts (
+    id           BIGSERIAL PRIMARY KEY,
+    user_id      BIGINT NOT NULL,
+    category     TEXT NOT NULL,
+    kind         TEXT NOT NULL,
+    from_chat_id BIGINT NOT NULL,
+    message_ids  BIGINT[] NOT NULL,
+    edited_text  TEXT,
+    status       TEXT NOT NULL DEFAULT 'pending',
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    decided_at   TIMESTAMPTZ
+);
 """
 
 
@@ -935,13 +1013,16 @@ def remind_datetime(days: int) -> datetime:
     return target.replace(hour=6, minute=30, second=0, microsecond=0)
 
 
-async def deliver(context, from_chat_id: int, message_ids: list[int], category: str, code: str) -> int:
+async def deliver(
+    context, from_chat_id: int, message_ids: list[int], category: str, code: str, exclude=None
+) -> int:
     """Send a header (in the recipient's own language, with a Block button) and
     a copy of the message(s) to every team member. copy_message does not reveal
     the sender. protect_content stops team members from forwarding or saving the
     request, so private cases stay private. One failing recipient does not stop
-    the others. Returns how many got it."""
-    ids = await recipient_ids()
+    the others. `exclude` skips some recipients (the owner gets a review card
+    instead for channel requests). Returns how many got it."""
+    ids = [i for i in await recipient_ids() if i not in (exclude or ())]
     rows = await db(
         "fetch", "SELECT user_id, lang FROM users WHERE user_id = ANY($1::bigint[])", ids
     )
@@ -1187,7 +1268,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def handle_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Category chosen -> show the preview with Send / Don't send."""
+    """Category chosen -> show the preview with the send options."""
     query = update.callback_query
     category = query.data.split(":", 1)[1]
     await query.answer()
@@ -1198,13 +1279,14 @@ async def handle_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if getattr(query.message, "reply_to_message", None) is None:
         await show(query, t(lang, "expired"), kb(menu_row(lang)))
         return
+    rows = [[btn(t(lang, "b_send_private" if CHANNEL_CHAT else "b_confirm_send"), f"send:{category}")]]
+    if CHANNEL_CHAT:
+        rows.append([btn(t(lang, "b_send_channel"), f"sendch:{category}")])
+    rows.append([btn(t(lang, "b_cancel_send"), "cancel")])
     await show(
         query,
-        t(lang, "preview", category=CATEGORY_LABELS[lang][category]),
-        kb(
-            [btn(t(lang, "b_confirm_send"), f"send:{category}")],
-            [btn(t(lang, "b_cancel_send"), "cancel")],
-        ),
+        t(lang, "preview_channel" if CHANNEL_CHAT else "preview", category=CATEGORY_LABELS[lang][category]),
+        InlineKeyboardMarkup(rows),
     )
 
 
@@ -1220,9 +1302,10 @@ async def handle_cancel_send(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 async def handle_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
+    to_channel = query.data.startswith("sendch:")
     category = query.data.split(":", 1)[1]
     await query.answer()
-    if category not in CATEGORIES:
+    if category not in CATEGORIES or (to_channel and not CHANNEL_CHAT):
         return
 
     user = await get_user(query.from_user)
@@ -1249,9 +1332,15 @@ async def handle_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
             message_ids = list(entry["ids"])
             break
 
+    # For channel requests the owner gets the review card instead of the normal copy.
     delivered = await deliver(
-        context, original.chat_id, message_ids, category, user["anon_code"]
+        context, original.chat_id, message_ids, category, user["anon_code"],
+        exclude={OWNER_ID} if to_channel else None,
     )
+    if to_channel and await queue_channel_post(
+        context.bot, query.from_user.id, original, message_ids, category, user["anon_code"]
+    ):
+        delivered += 1
 
     if delivered:
         await db(
@@ -1265,10 +1354,10 @@ async def handle_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if original.text:
             rows.append([btn(t(lang, "b_save_journal"), "js")])
         rows.append(menu_row_new(lang))
-        await show(query, t(lang, "sent_short"), None)
+        await show(query, t(lang, "sent_channel_short" if to_channel else "sent_short"), None)
         # The thank-you and the verse arrive as a new message (replying to the
         # original so "Save to my journal" can still find it).
-        thanks = t(lang, "sent", verse=random_verse(lang))
+        thanks = t(lang, "sent_channel" if to_channel else "sent", verse=random_verse(lang))
         try:
             await context.bot.send_message(
                 chat_id=query.from_user.id,
@@ -1287,6 +1376,145 @@ async def handle_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
             query.from_user.id,
         )
         await show(query, t(lang, "send_failed"), kb(menu_row(lang)))
+
+
+# ---------------------------------------------------------------------------
+# Channel posts: the owner reviews, edits, approves or rejects
+# ---------------------------------------------------------------------------
+async def get_pending_post(post_id: int):
+    return await db(
+        "fetchrow", "SELECT * FROM channel_posts WHERE id = $1 AND status = 'pending'", post_id
+    )
+
+
+def review_keyboard(post_id: int, code: str) -> InlineKeyboardMarkup:
+    lang = ADMIN_LANG
+    return kb(
+        [btn(t(lang, "b_ch_approve"), f"chp:ok:{post_id}")],
+        [btn(t(lang, "b_ch_edit"), f"chp:ed:{post_id}"), btn(t(lang, "b_ch_reject"), f"chp:no:{post_id}")],
+        [btn(t(lang, "b_block_sender"), f"blk:{code}")],
+    )
+
+
+async def send_post_content(bot, chat_id, post):
+    """Copy the sender's message(s) to chat_id (the channel, or the owner for a preview).
+    If the owner edited the text, it replaces the text (or the caption of the first
+    media message). copy_message never reveals the sender."""
+    edited = post["edited_text"]
+    for i, mid in enumerate(post["message_ids"]):
+        if i == 0 and edited is not None:
+            if post["kind"] == "text":
+                await bot.send_message(chat_id=chat_id, text=edited)
+            else:
+                await bot.copy_message(
+                    chat_id=chat_id, from_chat_id=post["from_chat_id"], message_id=mid, caption=edited
+                )
+        else:
+            await bot.copy_message(chat_id=chat_id, from_chat_id=post["from_chat_id"], message_id=mid)
+
+
+async def queue_channel_post(
+    bot, user_id: int, original, message_ids: list[int], category: str, code: str
+) -> bool:
+    """Save the post as pending and send the review card to the owner."""
+    post_id = await db(
+        "fetchval",
+        "INSERT INTO channel_posts (user_id, category, kind, from_chat_id, message_ids) "
+        "VALUES ($1, $2, $3, $4, $5) RETURNING id",
+        user_id, category, detect_kind(original), original.chat_id, message_ids,
+    )
+    post = await get_pending_post(post_id)
+    try:
+        await bot.send_message(
+            chat_id=OWNER_ID,
+            text=t(
+                ADMIN_LANG, "ch_header", code=code, category=CATEGORY_PLAIN[category],
+                time=format_time(datetime.now(EAT), "en"),
+            ),
+        )
+        await send_post_content(bot, OWNER_ID, post)
+        await bot.send_message(
+            chat_id=OWNER_ID, text=t(ADMIN_LANG, "ch_ask"), reply_markup=review_keyboard(post_id, code)
+        )
+        return True
+    except TelegramError as e:
+        logging.warning("Could not send the channel review to the owner: %s", e)
+        await db("execute", "DELETE FROM channel_posts WHERE id = $1", post_id)
+        return False
+
+
+async def notify_sender(bot, user_id: int, key: str):
+    row = await db("fetchrow", "SELECT lang FROM users WHERE user_id = $1", user_id)
+    lang = (row and row["lang"]) or "en"
+    try:
+        await bot.send_message(chat_id=user_id, text=t(lang, key))
+    except TelegramError:
+        pass  # they blocked the bot; nothing to do
+
+
+async def handle_channel_post(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """chp:ok|no|ed|cancel:<post id>. Owner only."""
+    query = update.callback_query
+    uid = query.from_user.id
+    lang = ADMIN_LANG
+    if not is_owner(uid):
+        await query.answer(t(lang, "owner_only"), show_alert=True)
+        return
+    await query.answer()
+    parts = query.data.split(":")
+    try:
+        action, post_id = parts[1], int(parts[2])
+    except (IndexError, ValueError):
+        return
+    post = await get_pending_post(post_id)
+    if post is None:
+        await show(query, t(lang, "ch_gone"), None)
+        return
+    code = anon_code(post["user_id"])
+
+    if action == "ok":
+        # Claim it first so a double tap can never post twice.
+        claimed = await db(
+            "fetchrow",
+            "UPDATE channel_posts SET status = 'posted', decided_at = now() "
+            "WHERE id = $1 AND status = 'pending' RETURNING id",
+            post_id,
+        )
+        if claimed is None:
+            await show(query, t(lang, "ch_gone"), None)
+            return
+        try:
+            await send_post_content(context.bot, CHANNEL_CHAT, post)
+        except TelegramError as e:
+            await db(
+                "execute",
+                "UPDATE channel_posts SET status = 'pending', decided_at = NULL WHERE id = $1",
+                post_id,
+            )
+            await show(query, t(lang, "ch_post_failed", err=str(e)[:200]), review_keyboard(post_id, code))
+            return
+        await show(query, t(lang, "ch_posted_owner"), None)
+        await notify_sender(context.bot, post["user_id"], "ch_posted")
+
+    elif action == "no":
+        await db(
+            "execute",
+            "UPDATE channel_posts SET status = 'rejected', decided_at = now() WHERE id = $1",
+            post_id,
+        )
+        await show(query, t(lang, "ch_rejected_owner"), None)
+        await notify_sender(context.bot, post["user_id"], "ch_rejected")
+
+    elif action == "ed":
+        if post["kind"] == "video_note":
+            await query.message.reply_text(t(lang, "ch_edit_unsupported"))
+            return
+        await set_state(uid, f"chedit:{post_id}")
+        await show(query, t(lang, "ch_edit_prompt"), kb([btn(t(lang, "b_cancel"), f"chp:cancel:{post_id}")]))
+
+    elif action == "cancel":
+        await set_state(uid, None)
+        await show(query, t(lang, "ch_ask"), review_keyboard(post_id, code))
 
 
 async def handle_save_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1383,6 +1611,32 @@ async def handle_state_message(update: Update, context: ContextTypes.DEFAULT_TYP
         await set_state(uid, None)
         _, text = await set_blocked_by_code(message.text, True, ADMIN_LANG)
         await message.reply_text(text)
+
+    elif state and state.startswith("chedit:") and is_owner(uid):
+        try:
+            post_id = int(state.split(":", 1)[1])
+        except ValueError:
+            await set_state(uid, None)
+            return
+        post = await get_pending_post(post_id)
+        if post is None:
+            await set_state(uid, None)
+            await message.reply_text(t(ADMIN_LANG, "ch_gone"))
+            return
+        limit = MAX_TEXT if post["kind"] == "text" else 1024  # Telegram caption limit
+        if len(message.text) > limit:
+            await message.reply_text(t(ADMIN_LANG, "ch_edit_too_long", n=limit))
+            return  # state stays, so the owner can send a shorter version
+        await set_state(uid, None)
+        await db("execute", "UPDATE channel_posts SET edited_text = $2 WHERE id = $1", post_id, message.text)
+        post = await get_pending_post(post_id)
+        await message.reply_text(t(ADMIN_LANG, "ch_edited_head"))
+        await send_post_content(context.bot, uid, post)
+        await context.bot.send_message(
+            chat_id=uid,
+            text=t(ADMIN_LANG, "ch_ask"),
+            reply_markup=review_keyboard(post_id, anon_code(post["user_id"])),
+        )
 
     else:
         await set_state(uid, None)
@@ -2656,6 +2910,8 @@ async def handle_removeadmin_command(update: Update, context: ContextTypes.DEFAU
 async def send_daily_reminder(context: ContextTypes.DEFAULT_TYPE):
     """06:30 Ethiopian-standard time: verse for daily-verse subscribers."""
     await purge_expired_admins()
+    # Channel posts keep the sender's ID only for a short time.
+    await db("execute", "DELETE FROM channel_posts WHERE created_at < now() - interval '30 days'")
     rows = await db(
         "fetch",
         # Only people who finished choosing a language (reminders are on by default).
@@ -2801,11 +3057,13 @@ def build_application():
         (r"^r:", handle_reminder_toggle),
         (r"^cat:", handle_category),
         (r"^send:", handle_send),
+        (r"^sendch:", handle_send),
         (r"^cancel$", handle_cancel_send),
         (r"^js$", handle_save_request),
         (r"^j:", handle_journal),
         (r"^adm:", handle_admin),
         (r"^bc:", handle_broadcast),
+        (r"^chp:", handle_channel_post),
         (r"^ainv:", handle_admin_invite),
         (r"^blk:", handle_block_button),
     ):
