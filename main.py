@@ -89,6 +89,8 @@ CHANNEL_ID = os.environ.get("CHANNEL_ID", "").strip()
 CHANNEL_CHAT = (
     int(CHANNEL_ID) if CHANNEL_ID.lstrip("-").isdigit() else CHANNEL_ID
 ) or None
+# Public link and display name of the channel (shown to users as a named button, never a raw link).
+CHANNEL_URL = os.environ.get("CHANNEL_URL", "https://t.me/anonymousprayerchannel").strip()
 
 WEBHOOK_URL = (
     os.environ.get("WEBHOOK_URL") or os.environ.get("RENDER_EXTERNAL_URL") or ""
@@ -334,6 +336,13 @@ TEXTS = {
             "⚠️ Couldn't post: {err}\n\nCheck that the bot is an admin of the channel "
             "with permission to post, and that CHANNEL_ID is correct."
         ),
+        # ---- channel invitation / daily verse in the channel ----
+        "channel_invite": (
+            "📢 Join our channel\n\nThe daily verse is posted in the Anonymous Prayer Channel. "
+            "If you join it, you will read the verse there. If you don't, I'll keep sending "
+            "it to you here."
+        ),
+        "b_join_channel": "📢 Join Anonymous Prayer Channel",
         # ---- admin panel ----
         "adm_panel": "🔧 Admin panel\n\nYou are: {role}",
         "role_owner": "Owner (full control)",
@@ -552,6 +561,12 @@ TEXTS = {
         "ch_rejected": (
             "የጸሎት ጥያቄዎ በቻናሉ ላይ አልተለጠፈም፤ ነገር ግን የጸሎት ቡድኑ ተቀብሎ እየጸለየ ነው። 🙏"
         ),
+        # ---- channel invitation ----
+        "channel_invite": (
+            "📢 ቻናላችንን ይቀላቀሉ\n\nየዕለቱ ጥቅስ በ Anonymous Prayer ቻናል ላይ ይለቀቃል። "
+            "ቻናሉን ከተቀላቀሉ ጥቅሱን እዚያ ያነባሉ። ካልተቀላቀሉ ግን እዚህ መላኬን እቀጥላለሁ።"
+        ),
+        "b_join_channel": "📢 Anonymous Prayer ቻናልን ተቀላቀሉ",
         # ---- admin invitation (the admin panel itself is English only) ----
         "admin_now": (
             "🔧 አሁን የዚህ ቦት አስተዳዳሪ ሆነዋል። 🏠 ዋና ማውጫ → 🔧 አስተዳዳሪ ይክፈቱ። "
@@ -1113,6 +1128,15 @@ async def handle_lang_choice(update: Update, context: ContextTypes.DEFAULT_TYPE)
             text=t(lang, "reminders_note"),
             reply_markup=kb([btn(t(lang, "b_reminders"), "m:reminders")]),
         )
+        if CHANNEL_CHAT:
+            await context.bot.send_message(
+                chat_id=query.from_user.id,
+                text=t(lang, "channel_invite"),
+                reply_markup=kb(
+                    [InlineKeyboardButton(t(lang, "b_join_channel"), url=CHANNEL_URL)],
+                    menu_row_new(lang),
+                ),
+            )
 
 
 async def handle_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2907,19 +2931,59 @@ async def handle_removeadmin_command(update: Update, context: ContextTypes.DEFAU
 # ---------------------------------------------------------------------------
 # Scheduled jobs
 # ---------------------------------------------------------------------------
+async def is_channel_member(bot, user_id: int) -> bool:
+    """True if the person has joined the channel. Any error counts as 'not a member',
+    so they simply get the verse in the bot instead."""
+    if not CHANNEL_CHAT:
+        return False
+    try:
+        member = await bot.get_chat_member(chat_id=CHANNEL_CHAT, user_id=user_id)
+    except TelegramError:
+        return False
+    return member.status in ("member", "administrator", "creator") or (
+        member.status == "restricted" and bool(getattr(member, "is_member", False))
+    )
+
+
+async def post_daily_verse_to_channel(bot) -> bool:
+    """Post today's verse (English and Amharic) in the channel. True if it worked."""
+    if not CHANNEL_CHAT:
+        return False
+    verse = VERSES[datetime.now(EAT).date().toordinal() % len(VERSES)]
+    en, am = verse_block("en", verse), verse_block("am", verse)
+    text = "🌅 Good morning · እንደምን አደሩ!\n\n" + en
+    if am != en:
+        text += "\n\n" + am
+    markup = None
+    if bot.username:
+        markup = kb([InlineKeyboardButton("🙏 Send a prayer request", url=f"https://t.me/{bot.username}")])
+    try:
+        await bot.send_message(chat_id=CHANNEL_CHAT, text=text, reply_markup=markup)
+        return True
+    except TelegramError as e:
+        logging.warning("Daily verse could not be posted in the channel: %s", e)
+        return False
+
+
 async def send_daily_reminder(context: ContextTypes.DEFAULT_TYPE):
-    """06:30 Ethiopian-standard time: verse for daily-verse subscribers."""
+    """06:30 Ethiopian-standard time: the verse goes to the channel, and to the bot
+    only for subscribers who have not joined the channel (or everyone, if the
+    channel post failed)."""
     await purge_expired_admins()
     # Channel posts keep the sender's ID only for a short time.
     await db("execute", "DELETE FROM channel_posts WHERE created_at < now() - interval '30 days'")
+    channel_ok = await post_daily_verse_to_channel(context.bot)
     rows = await db(
         "fetch",
         # Only people who finished choosing a language (reminders are on by default).
         "SELECT user_id, lang FROM users WHERE subscribed AND NOT blocked AND lang IS NOT NULL",
     )
-    logging.info("Sending daily verse to %d subscribers", len(rows))
+    logging.info("Sending daily verse: %d subscribers, channel post ok: %s", len(rows), channel_ok)
     for row in rows:
         lang = row["lang"] or "en"
+        if channel_ok and await is_channel_member(context.bot, row["user_id"]):
+            await asyncio.sleep(0.03)
+            continue  # they read it in the channel
         try:
             await context.bot.send_message(
                 chat_id=row["user_id"],
@@ -3120,6 +3184,66 @@ async def run_one_time_tasks(conn) -> None:
         logging.info("One-time task: %s switched on for %d existing users", ", ".join(ENABLE_FOR_EXISTING_USERS), changed)
 
 
+async def send_channel_invite_once(bot):
+    """Runs once ever (a marker row remembers it): everyone who is already in the bot
+    and has not joined the channel yet gets the 'Join the channel' message once.
+    The owner is told the numbers when it is done."""
+    if not CHANNEL_CHAT:
+        return
+    try:
+        first_run = await db(
+            "fetchval",
+            "INSERT INTO one_time_tasks (name) VALUES ('channel_invite_existing_users') "
+            "ON CONFLICT DO NOTHING RETURNING name",
+        )
+        if not first_run:
+            return
+        rows = await db(
+            "fetch", "SELECT user_id, lang FROM users WHERE NOT blocked AND lang IS NOT NULL"
+        )
+        sent = skipped = failed = 0
+        for row in rows:
+            if await is_channel_member(bot, row["user_id"]):
+                skipped += 1  # already in the channel
+                await asyncio.sleep(0.03)
+                continue
+            lang = row["lang"] or "en"
+            for attempt in (1, 2):
+                try:
+                    await bot.send_message(
+                        chat_id=row["user_id"],
+                        text=t(lang, "channel_invite"),
+                        reply_markup=kb(
+                            [InlineKeyboardButton(t(lang, "b_join_channel"), url=CHANNEL_URL)],
+                            menu_row_new(lang),
+                        ),
+                    )
+                    sent += 1
+                    break
+                except RetryAfter as e:
+                    delay = e.retry_after
+                    delay = delay.total_seconds() if hasattr(delay, "total_seconds") else delay
+                    if attempt == 2:
+                        failed += 1
+                    else:
+                        await asyncio.sleep(float(delay) + 1)
+                except TelegramError:
+                    failed += 1  # blocked the bot, or another Telegram error
+                    break
+            await asyncio.sleep(0.05)  # stay well under Telegram's rate limit
+        note = f"invite sent to {sent}, already in channel {skipped}, failed {failed}"
+        await db(
+            "execute",
+            "UPDATE one_time_tasks SET note = $1 WHERE name = 'channel_invite_existing_users'",
+            note,
+        )
+        await _notify_owner(
+            f"📢 Channel invitation finished.\nSent: {sent}\nAlready in the channel: {skipped}\nFailed: {failed}"
+        )
+    except Exception:
+        logging.exception("Channel invitation task crashed")
+
+
 async def main():
     global pool
     pool = await asyncpg.create_pool(
@@ -3183,6 +3307,7 @@ async def main():
     logging.info("Bot is starting with webhook at %s", WEBHOOK_URL)
     async with application:
         await application.start()
+        application.create_task(send_channel_invite_once(application.bot))
         await server.serve()
         await application.stop()
     await pool.close()
