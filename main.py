@@ -343,6 +343,8 @@ TEXTS = {
             "it to you here."
         ),
         "b_join_channel": "📢 Join Anonymous Prayer Channel",
+        "reminder_card": "🌅 Good morning! Take a moment to pray today.",
+        "b_card": "🖼 Verse card",
         # ---- admin panel ----
         "adm_panel": "🔧 Admin panel\n\nYou are: {role}",
         "role_owner": "Owner (full control)",
@@ -567,6 +569,7 @@ TEXTS = {
             "ቻናሉን ከተቀላቀሉ ጥቅሱን እዚያ ያነባሉ። ካልተቀላቀሉ ግን እዚህ መላኬን እቀጥላለሁ።"
         ),
         "b_join_channel": "📢 Anonymous Prayer ቻናልን ተቀላቀሉ",
+        "reminder_card": "🌅 እንደምን አደሩ! ዛሬ ለጸሎት ጥቂት ጊዜ ይውሰዱ።",
         # ---- admin invitation (the admin panel itself is English only) ----
         "admin_now": (
             "🔧 አሁን የዚህ ቦት አስተዳዳሪ ሆነዋል። 🏠 ዋና ማውጫ → 🔧 አስተዳዳሪ ይክፈቱ። "
@@ -759,6 +762,10 @@ CREATE TABLE IF NOT EXISTS channel_posts (
     status       TEXT NOT NULL DEFAULT 'pending',
     created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
     decided_at   TIMESTAMPTZ
+);
+CREATE TABLE IF NOT EXISTS settings (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
 );
 """
 
@@ -2566,6 +2573,7 @@ def admin_home(uid: int, lang: str):
         rows.append([btn(t(lang, "b_broadcast"), "adm:bc")])
     elif can_quit_admin(uid):
         rows.append([btn(t(lang, "b_quit"), "adm:quit")])
+    rows.append([btn(t(lang, "b_card"), "adm:card")])
     rows.append(menu_row(lang))
     role = t(lang, "role_owner" if is_owner(uid) else "role_admin")
     return t(lang, "adm_panel", role=role), InlineKeyboardMarkup(rows)
@@ -2659,6 +2667,25 @@ async def handle_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if await drop_buttons(query):
             text, markup = admin_home(uid, lang)
             await context.bot.send_message(chat_id=uid, text=text, reply_markup=markup)
+
+    elif action in ("card", "cardnew", "cardtest", "cardagain", "cardtoggle"):
+        if action == "cardtoggle":
+            if not await owner_only():
+                return
+            await set_card_enabled(not await card_enabled())
+        if action == "cardtest":
+            await send_test_card(context.bot, uid, randomize=True)
+        elif action == "cardagain":
+            if not await drop_buttons(query):
+                return
+            await send_test_card(context.bot, uid, randomize=True)
+        elif action == "cardnew":
+            if await drop_buttons(query):
+                text, markup = await card_menu(uid)
+                await context.bot.send_message(chat_id=uid, text=text, reply_markup=markup)
+        else:  # "card" and "cardtoggle" show the card menu in place
+            text, markup = await card_menu(uid)
+            await show(query, text, markup)
 
     elif action == "blocked":
         await render_blocked(query, uid, lang)
@@ -2930,6 +2957,255 @@ async def handle_removeadmin_command(update: Update, context: ContextTypes.DEFAU
 # ---------------------------------------------------------------------------
 # Scheduled jobs
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# --- verse card: the daily Amharic verse drawn on a picture (PNG) ---
+# Put 1:1 background pictures (png/jpg/webp, any number, 7 = one per weekday) and ONE
+# font file (.ttf/.otf, it must have Amharic letters) in a folder called "cards" next
+# to this file. The picture for the day is chosen by rotating through them.
+# ---------------------------------------------------------------------------
+CARD_DIR = Path(__file__).with_name("cards")
+CARD_SIZE = 1080
+CARD_TEXT_COLOR = (255, 255, 255)
+CARD_STROKE_COLOR = (15, 15, 25)
+CARD_DIM = 0.0  # 0 = pictures untouched. Try 0.15 to 0.3 to darken busy backgrounds a little.
+CARD_PICTURE_TYPES = (".png", ".jpg", ".jpeg", ".webp")
+
+
+def card_assets():
+    """(background pictures, font file). Either can be missing: [] / None."""
+    if not CARD_DIR.is_dir():
+        return [], None
+    files = sorted((p for p in CARD_DIR.iterdir() if p.is_file()), key=lambda p: p.name.lower())
+    backgrounds = [p for p in files if p.suffix.lower() in CARD_PICTURE_TYPES]
+    fonts = [p for p in files if p.suffix.lower() in (".ttf", ".otf")]
+    return backgrounds, (fonts[0] if fonts else None)
+
+
+def card_fallback_font():
+    """A font for characters the Amharic font lacks (usually the digits and ':' in
+    'መዝሙር 23:1'): the DejaVu Sans Bold shipped in the bot's fonts folder."""
+    found = []
+    for folder in FONT_DIRS:
+        found += [p for p in folder.glob("*.ttf") if "dejavu" in p.name.lower()]
+    found.sort(key=lambda p: ("bold" not in p.name.lower(), "mono" in p.name.lower(), "serif" in p.name.lower(), p.name))
+    return found[0] if found else None
+
+
+def todays_verse() -> dict:
+    return VERSES[datetime.now(EAT).date().toordinal() % len(VERSES)]
+
+
+def render_verse_card(text: str, reference: str, background, font_path) -> bytes:
+    """Draw the verse (centered, auto-sized to fit) and its reference with a stroke
+    on the picture. Returns PNG bytes."""
+    import io
+    from PIL import Image, ImageDraw, ImageFont, ImageOps
+
+    S = CARD_SIZE
+    img = ImageOps.fit(Image.open(background).convert("RGB"), (S, S), Image.LANCZOS)
+    if CARD_DIM:
+        img = Image.blend(img, Image.new("RGB", (S, S), (0, 0, 0)), CARD_DIM)
+    draw = ImageDraw.Draw(img)
+    margin = 100
+    max_w = S - 2 * margin
+    max_h = S - 2 * margin - 110  # leaves room for the reference line
+
+    def load(px):
+        return ImageFont.truetype(str(font_path), px)
+
+    def stroke_for(px):
+        return max(3, round(px * 0.09))
+
+    def fits(s, f, sw):
+        return draw.textlength(s, font=f) + 2 * sw <= max_w
+
+    def wrap(f, sw):
+        lines, cur = [], ""
+        for word in text.split():
+            trial = f"{cur} {word}".strip()
+            if fits(trial, f, sw):
+                cur = trial
+                continue
+            if cur:
+                lines.append(cur)
+            if fits(word, f, sw):
+                cur = word
+            else:  # one very long word: break it by letters
+                piece = ""
+                for ch in word:
+                    if fits(piece + ch, f, sw):
+                        piece += ch
+                    else:
+                        lines.append(piece)
+                        piece = ch
+                cur = piece
+        if cur:
+            lines.append(cur)
+        return lines
+
+    size = 96
+    while True:
+        f, sw = load(size), stroke_for(size)
+        lines = wrap(f, sw)
+        asc, desc = f.getmetrics()
+        line_h = round((asc + desc) * 1.12)
+        if len(lines) * line_h <= max_h or size <= 32:
+            break
+        size -= 4
+
+    ref_size = max(32, round(size * 0.6))
+    rf, rsw = load(ref_size), stroke_for(ref_size)
+    ras, rds = rf.getmetrics()
+    fb_path = card_fallback_font()
+    fb = ImageFont.truetype(str(fb_path), ref_size) if fb_path else None
+
+    def glyph_look(ch):
+        probe = Image.new("L", (ref_size * 2, ref_size * 2), 0)
+        ImageDraw.Draw(probe).text((8, 8), ch, font=rf, fill=255)
+        return probe.tobytes()
+
+    notdef = glyph_look("\U0010FFFF")  # what a letter missing from the font looks like
+
+    def has_glyph(ch):
+        return ch.isspace() or glyph_look(ch) != notdef
+
+    def draw_reference(cx, top):
+        """Letters the Amharic font lacks (digits, ':') use the fallback font."""
+        runs = []
+        for ch in reference:
+            use = rf if (fb is None or has_glyph(ch)) else fb
+            if runs and runs[-1][1] is use:
+                runs[-1][0] += ch
+            else:
+                runs.append([ch, use])
+        x = cx - sum(draw.textlength(r[0], font=r[1]) for r in runs) / 2
+        for run_text, run_font in runs:
+            draw.text(
+                (x, top + ras), run_text, font=run_font, fill=CARD_TEXT_COLOR, anchor="ls",
+                stroke_width=rsw, stroke_fill=CARD_STROKE_COLOR,
+            )
+            x += draw.textlength(run_text, font=run_font)
+
+    gap = round(size * 0.6)
+    y = (S - (len(lines) * line_h + gap + ras + rds)) / 2
+    for line in lines:
+        draw.text(
+            (S / 2, y), line, font=f, fill=CARD_TEXT_COLOR, anchor="mt",
+            stroke_width=sw, stroke_fill=CARD_STROKE_COLOR,
+        )
+        y += line_h
+    draw_reference(S / 2, y + gap)
+    buf = io.BytesIO()
+    img.save(buf, format="PNG", optimize=True)
+    return buf.getvalue()
+
+
+def build_card(verse: dict, bg_index=None) -> tuple[bytes, int, int]:
+    """PNG for a verse. Returns (png, background number, backgrounds found).
+    Raises RuntimeError with a plain reason if it can't be made."""
+    backgrounds, font_path = card_assets()
+    if not backgrounds:
+        raise RuntimeError("there are no background pictures in the cards folder")
+    if not font_path:
+        raise RuntimeError("there is no .ttf/.otf font file in the cards folder")
+    if not verse["am"]:
+        raise RuntimeError(f"{verse['ref']} has no Amharic text in verses.json")
+    n = len(backgrounds)
+    i = (datetime.now(EAT).date().toordinal() if bg_index is None else bg_index) % n
+    png = render_verse_card(verse["am"], verse["ref_am"] or verse["ref"], backgrounds[i], font_path)
+    return png, i + 1, n
+
+
+async def card_enabled() -> bool:
+    return await db("fetchval", "SELECT value FROM settings WHERE key = 'verse_card'") == "on"
+
+
+async def set_card_enabled(on: bool):
+    await db(
+        "execute",
+        "INSERT INTO settings (key, value) VALUES ('verse_card', $1) "
+        "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
+        "on" if on else "off",
+    )
+
+
+async def send_card(bot, chat_id, card: dict, caption: str, markup=None):
+    """Send the picture. The first send uploads it; later sends reuse Telegram's copy
+    (file_id), so the picture is uploaded only once a day. Raises TelegramError."""
+    msg = await bot.send_photo(
+        chat_id=chat_id, photo=card["file_id"] or card["png"], caption=caption, reply_markup=markup
+    )
+    if card["file_id"] is None and msg.photo:
+        card["file_id"] = msg.photo[-1].file_id
+
+
+async def card_menu(uid: int):
+    backgrounds, font_path = card_assets()
+    on = await card_enabled()
+    text = (
+        "🖼 Verse card\n\n"
+        f"Status: {'ON ✅' if on else 'OFF'}\n"
+        f"Background pictures: {len(backgrounds)}\n"
+        f"Font: {font_path.name if font_path else 'missing'}\n\n"
+        "ON: at 6:30 AM the channel gets the Amharic verse as a picture, and so do "
+        "Amharic users who haven't joined the channel. OFF: the text verse is posted as before.\n"
+        "Test cards are only sent to you, never to the channel."
+    )
+    missing = [x for x, ok in (("background pictures", backgrounds), ("a font file", font_path)) if not ok]
+    if missing:
+        text += "\n\n⚠️ Missing in the cards folder: " + " and ".join(missing)
+    rows = [[btn("🧪 Test card", "adm:cardtest")]]
+    if is_owner(uid):
+        rows.append([btn("Turn OFF" if on else "Turn ON (go live)", "adm:cardtoggle")])
+    rows.append([btn(t(ADMIN_LANG, "b_back"), "adm:home")])
+    return text, InlineKeyboardMarkup(rows)
+
+
+async def send_test_card(bot, chat_id: int, bg=None, verse_no=None, randomize=False):
+    """Send a test card to ONE admin only. bg / verse_no are 1-based."""
+    try:
+        backgrounds, _ = card_assets()
+        if verse_no:
+            vi = (verse_no - 1) % len(VERSES)
+        elif randomize:
+            vi = random.choice([i for i, v in enumerate(VERSES) if v["am"]] or [0])
+        else:
+            vi = datetime.now(EAT).date().toordinal() % len(VERSES)
+        if bg:
+            bi = bg - 1
+        elif randomize and backgrounds:
+            bi = random.randrange(len(backgrounds))
+        else:
+            bi = None
+        png, bg_no, bg_total = await asyncio.to_thread(build_card, VERSES[vi], bi)
+    except Exception as e:
+        logging.warning("Test card failed: %s", e)
+        await bot.send_message(chat_id=chat_id, text=f"⚠️ I can't make the card yet: {e}.")
+        return
+    await bot.send_photo(
+        chat_id=chat_id,
+        photo=png,
+        caption=(
+            f"🧪 Test card · picture {bg_no} of {bg_total} · verse {vi + 1} of {len(VERSES)}\n"
+            "Only you can see this. Nothing was posted."
+        ),
+        reply_markup=kb([btn("🔄 Another test", "adm:cardagain")], [btn("🖼 Card menu", "adm:cardnew")]),
+    )
+
+
+async def handle_testcard_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/testcard [picture number] [verse number]: a test card for admins, sent only to them."""
+    if not await _admin_command_guard(update, False):
+        return
+    nums = [int(a) for a in context.args[:2] if a.isdigit() and int(a) > 0]
+    await send_test_card(
+        context.bot, update.effective_chat.id,
+        bg=nums[0] if len(nums) > 0 else None,
+        verse_no=nums[1] if len(nums) > 1 else None,
+    )
+# --- end verse card ---
+
+
 async def is_channel_member(bot, user_id: int) -> bool:
     """True if the person has joined the channel. Any error counts as 'not a member',
     so they simply get the verse in the bot instead."""
@@ -2944,11 +3220,12 @@ async def is_channel_member(bot, user_id: int) -> bool:
     )
 
 
-async def post_daily_verse_to_channel(bot) -> bool:
-    """Post today's verse (English and Amharic) in the channel. True if it worked."""
+async def post_daily_verse_to_channel(bot, card=None) -> bool:
+    """Post today's verse in the channel: as the picture when there is one, otherwise
+    as text (English and Amharic). True if it worked."""
     if not CHANNEL_CHAT:
         return False
-    verse = VERSES[datetime.now(EAT).date().toordinal() % len(VERSES)]
+    verse = todays_verse()
     en, am = verse_block("en", verse), verse_block("am", verse)
     text = "🌅 Good morning · እንደምን አደሩ!\n\n" + en
     if am != en:
@@ -2956,6 +3233,12 @@ async def post_daily_verse_to_channel(bot) -> bool:
     markup = None
     if bot.username:
         markup = kb([InlineKeyboardButton("🙏 Send a prayer request", url=f"https://t.me/{bot.username}")])
+    if card:
+        try:
+            await send_card(bot, CHANNEL_CHAT, card, "🌅 እንደምን አደሩ!", markup)
+            return True
+        except TelegramError as e:
+            logging.warning("Verse card could not be posted, sending the text verse instead: %s", e)
     try:
         await bot.send_message(chat_id=CHANNEL_CHAT, text=text, reply_markup=markup)
         return True
@@ -2971,7 +3254,15 @@ async def send_daily_reminder(context: ContextTypes.DEFAULT_TYPE):
     await purge_expired_admins()
     # Channel posts keep the sender's ID only for a short time.
     await db("execute", "DELETE FROM channel_posts WHERE created_at < now() - interval '30 days'")
-    channel_ok = await post_daily_verse_to_channel(context.bot)
+    # The picture is used only when the owner switched the verse card on and it can be made.
+    card = None
+    if await card_enabled():
+        try:
+            png, _, _ = await asyncio.to_thread(build_card, todays_verse())
+            card = {"png": png, "file_id": None}
+        except Exception as e:
+            logging.warning("Verse card not used today, sending text verses: %s", e)
+    channel_ok = await post_daily_verse_to_channel(context.bot, card)
     rows = await db(
         "fetch",
         # Only people who finished choosing a language (reminders are on by default).
@@ -2984,11 +3275,16 @@ async def send_daily_reminder(context: ContextTypes.DEFAULT_TYPE):
             await asyncio.sleep(0.03)
             continue  # they read it in the channel
         try:
-            await context.bot.send_message(
-                chat_id=row["user_id"],
-                text=t(lang, "reminder", verse=daily_verse(lang)),
-                reply_markup=kb(menu_row_new(lang)),
-            )
+            if card and lang == "am":
+                await send_card(
+                    context.bot, row["user_id"], card, t(lang, "reminder_card"), kb(menu_row_new(lang))
+                )
+            else:
+                await context.bot.send_message(
+                    chat_id=row["user_id"],
+                    text=t(lang, "reminder", verse=daily_verse(lang)),
+                    reply_markup=kb(menu_row_new(lang)),
+                )
         except Forbidden:
             await db("execute", "UPDATE users SET subscribed = FALSE WHERE user_id = $1", row["user_id"])
         except TelegramError as e:
@@ -3110,6 +3406,7 @@ def build_application():
         ("unblock", handle_unblock_command),
         ("addadmin", handle_addadmin_command),
         ("removeadmin", handle_removeadmin_command),
+        ("testcard", handle_testcard_command),
     ):
         application.add_handler(CommandHandler(name, handler, filters=private))
 
