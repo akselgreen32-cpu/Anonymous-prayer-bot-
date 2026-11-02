@@ -963,12 +963,11 @@ def menu_keyboard(lang: str, admin: bool) -> InlineKeyboardMarkup:
 
 
 def help_keyboard(lang: str, new_message: bool) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        [
-            [InlineKeyboardButton(t(lang, "b_contact"), url=DEVELOPER_URL)],
-            menu_row_new(lang) if new_message else menu_row(lang),
-        ]
-    )
+    rows = [[InlineKeyboardButton(t(lang, "b_contact"), url=DEVELOPER_URL)]]
+    if CHANNEL_CHAT:
+        rows.append([InlineKeyboardButton(t(lang, "b_join_channel"), url=CHANNEL_URL)])
+    rows.append(menu_row_new(lang) if new_message else menu_row(lang))
+    return InlineKeyboardMarkup(rows)
 
 
 def language_keyboard() -> InlineKeyboardMarkup:
