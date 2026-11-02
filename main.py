@@ -2967,23 +2967,24 @@ CARD_DIR = Path(__file__).with_name("cards")
 CARD_SIZE = 1080
 CARD_TEXT_COLOR = (255, 255, 255)
 CARD_STROKE_COLOR = (15, 15, 25)
-CARD_DIM = 0.0  # 0 = pictures untouched. Try 0.15 to 0.3 to darken busy backgrounds a little.
+CARD_STROKE_RATIO = 0.065  # stroke thickness as a share of the letter size (smaller = thinner)
+CARD_PICTURE_OPACITY = 0.82  # 1.0 = picture as it is; lower = softer and darker, text stands out more
 CARD_PICTURE_TYPES = (".png", ".jpg", ".jpeg", ".webp")
 
 
 def card_assets():
-    """(background pictures, font file). Either can be missing: [] / None."""
+    """(background pictures, font files) from the cards folder. Either can be empty."""
     if not CARD_DIR.is_dir():
-        return [], None
+        return [], []
     files = sorted((p for p in CARD_DIR.iterdir() if p.is_file()), key=lambda p: p.name.lower())
     backgrounds = [p for p in files if p.suffix.lower() in CARD_PICTURE_TYPES]
     fonts = [p for p in files if p.suffix.lower() in (".ttf", ".otf")]
-    return backgrounds, (fonts[0] if fonts else None)
+    return backgrounds, fonts
 
 
 def card_fallback_font():
-    """A font for characters the Amharic font lacks (usually the digits and ':' in
-    'መዝሙር 23:1'): the DejaVu Sans Bold shipped in the bot's fonts folder."""
+    """A font for letters the Amharic font lacks (the digits and ':' in 'መዝሙር 23:1') and
+    for the @username watermark: the DejaVu Sans Bold shipped in the bot's fonts folder."""
     found = []
     for folder in FONT_DIRS:
         found += [p for p in folder.glob("*.ttf") if "dejavu" in p.name.lower()]
@@ -2995,26 +2996,75 @@ def todays_verse() -> dict:
     return VERSES[datetime.now(EAT).date().toordinal() % len(VERSES)]
 
 
-def render_verse_card(text: str, reference: str, background, font_path) -> bytes:
+def card_watermark(bot):
+    """'@botusername' for the corner of the card (None if the bot has no username yet)."""
+    try:
+        return f"@{bot.username}" if bot.username else None
+    except RuntimeError:
+        return None
+
+
+def telegram_icon(px: int):
+    """A small Telegram-style logo (blue circle, white paper plane), drawn with shapes."""
+    from PIL import Image, ImageDraw
+
+    k = 4  # draw big, then shrink, for smooth edges
+    big = px * k
+    icon = Image.new("RGBA", (big, big), (0, 0, 0, 0))
+    d = ImageDraw.Draw(icon)
+    sc = big / 100
+
+    def pts(*xy):
+        return [(x * sc, y * sc) for x, y in xy]
+
+    d.ellipse([0, 0, big - 1, big - 1], fill=(42, 171, 238, 255))
+    d.polygon(pts((21, 48), (77, 26), (65, 74), (47, 58)), fill=(255, 255, 255, 255))
+    d.polygon(pts((47, 58), (40, 69), (38, 55)), fill=(255, 255, 255, 255))
+    d.polygon(pts((77, 26), (47, 58), (40, 69), (52, 61)), fill=(205, 222, 236, 255))
+    icon = icon.resize((px, px), Image.LANCZOS)
+    icon.putalpha(icon.getchannel("A").point(lambda a: int(a * 0.9)))
+    return icon
+
+
+def draw_card_watermark(img, handle: str, font_path):
+    """Small Telegram logo + @username, centered near the bottom, slightly see-through."""
+    from PIL import Image, ImageDraw, ImageFont
+
+    S = img.width
+    f = ImageFont.truetype(str(font_path), 30)
+    icon_px, gap = 44, 12
+    layer = Image.new("RGBA", img.size, (0, 0, 0, 0))
+    d = ImageDraw.Draw(layer)
+    x0 = (S - (icon_px + gap + d.textlength(handle, font=f))) / 2
+    cy = S - 62
+    layer.paste(telegram_icon(icon_px), (round(x0), round(cy - icon_px / 2)))
+    d.text(
+        (x0 + icon_px + gap, cy), handle, font=f, fill=(255, 255, 255, 215), anchor="lm",
+        stroke_width=2, stroke_fill=(15, 15, 25, 170),
+    )
+    img.paste(Image.alpha_composite(img.convert("RGBA"), layer).convert("RGB"))
+
+
+def render_verse_card(text: str, reference: str, background, font_path, watermark=None) -> bytes:
     """Draw the verse (centered, auto-sized to fit) and its reference with a stroke
-    on the picture. Returns PNG bytes."""
+    on the picture, plus the small watermark. Returns PNG bytes."""
     import io
     from PIL import Image, ImageDraw, ImageFont, ImageOps
 
     S = CARD_SIZE
     img = ImageOps.fit(Image.open(background).convert("RGB"), (S, S), Image.LANCZOS)
-    if CARD_DIM:
-        img = Image.blend(img, Image.new("RGB", (S, S), (0, 0, 0)), CARD_DIM)
+    if CARD_PICTURE_OPACITY < 1:
+        img = Image.blend(Image.new("RGB", (S, S), (0, 0, 0)), img, CARD_PICTURE_OPACITY)
     draw = ImageDraw.Draw(img)
     margin = 100
     max_w = S - 2 * margin
-    max_h = S - 2 * margin - 110  # leaves room for the reference line
+    max_h = S - 2 * margin - 160  # leaves room for the reference line and the watermark
 
     def load(px):
         return ImageFont.truetype(str(font_path), px)
 
     def stroke_for(px):
-        return max(3, round(px * 0.09))
+        return max(2, round(px * CARD_STROKE_RATIO))
 
     def fits(s, f, sw):
         return draw.textlength(s, font=f) + 2 * sw <= max_w
@@ -3087,7 +3137,7 @@ def render_verse_card(text: str, reference: str, background, font_path) -> bytes
             x += draw.textlength(run_text, font=run_font)
 
     gap = round(size * 0.6)
-    y = (S - (len(lines) * line_h + gap + ras + rds)) / 2
+    y = (S - 70 - (len(lines) * line_h + gap + ras + rds)) / 2
     for line in lines:
         draw.text(
             (S / 2, y), line, font=f, fill=CARD_TEXT_COLOR, anchor="mt",
@@ -3095,25 +3145,31 @@ def render_verse_card(text: str, reference: str, background, font_path) -> bytes
         )
         y += line_h
     draw_reference(S / 2, y + gap)
+    if watermark:
+        draw_card_watermark(img, watermark, fb_path or font_path)
     buf = io.BytesIO()
     img.save(buf, format="PNG", optimize=True)
     return buf.getvalue()
 
 
-def build_card(verse: dict, bg_index=None) -> tuple[bytes, int, int]:
-    """PNG for a verse. Returns (png, background number, backgrounds found).
+def build_card(verse: dict, bg_index=None, font_index=None, watermark=None):
+    """PNG for a verse. The picture and the font rotate day by day (so the pairs keep
+    changing). Returns (png, picture no., pictures found, font no., fonts found).
     Raises RuntimeError with a plain reason if it can't be made."""
-    backgrounds, font_path = card_assets()
+    backgrounds, fonts = card_assets()
     if not backgrounds:
         raise RuntimeError("there are no background pictures in the cards folder")
-    if not font_path:
+    if not fonts:
         raise RuntimeError("there is no .ttf/.otf font file in the cards folder")
     if not verse["am"]:
         raise RuntimeError(f"{verse['ref']} has no Amharic text in verses.json")
-    n = len(backgrounds)
-    i = (datetime.now(EAT).date().toordinal() if bg_index is None else bg_index) % n
-    png = render_verse_card(verse["am"], verse["ref_am"] or verse["ref"], backgrounds[i], font_path)
-    return png, i + 1, n
+    day = datetime.now(EAT).date().toordinal()
+    bi = (day if bg_index is None else bg_index) % len(backgrounds)
+    fi = (day if font_index is None else font_index) % len(fonts)
+    png = render_verse_card(
+        verse["am"], verse["ref_am"] or verse["ref"], backgrounds[bi], fonts[fi], watermark
+    )
+    return png, bi + 1, len(backgrounds), fi + 1, len(fonts)
 
 
 async def card_enabled() -> bool:
@@ -3140,18 +3196,19 @@ async def send_card(bot, chat_id, card: dict, caption: str, markup=None):
 
 
 async def card_menu(uid: int):
-    backgrounds, font_path = card_assets()
+    backgrounds, fonts = card_assets()
     on = await card_enabled()
+    names = ", ".join(f.name for f in fonts[:6]) if fonts else "missing"
     text = (
         "🖼 Verse card\n\n"
         f"Status: {'ON ✅' if on else 'OFF'}\n"
         f"Background pictures: {len(backgrounds)}\n"
-        f"Font: {font_path.name if font_path else 'missing'}\n\n"
+        f"Fonts: {len(fonts)} ({names})\n\n"
         "ON: at 6:30 AM the channel gets the Amharic verse as a picture, and so do "
         "Amharic users who haven't joined the channel. OFF: the text verse is posted as before.\n"
-        "Test cards are only sent to you, never to the channel."
+        "Pictures and fonts rotate daily. Test cards are only sent to you, never to the channel."
     )
-    missing = [x for x, ok in (("background pictures", backgrounds), ("a font file", font_path)) if not ok]
+    missing = [x for x, ok in (("background pictures", backgrounds), ("a font file", fonts)) if not ok]
     if missing:
         text += "\n\n⚠️ Missing in the cards folder: " + " and ".join(missing)
     rows = [[btn("🧪 Test card", "adm:cardtest")]]
@@ -3161,10 +3218,10 @@ async def card_menu(uid: int):
     return text, InlineKeyboardMarkup(rows)
 
 
-async def send_test_card(bot, chat_id: int, bg=None, verse_no=None, randomize=False):
-    """Send a test card to ONE admin only. bg / verse_no are 1-based."""
+async def send_test_card(bot, chat_id: int, bg=None, verse_no=None, font_no=None, randomize=False):
+    """Send a test card to ONE admin only. bg / verse_no / font_no are 1-based."""
     try:
-        backgrounds, _ = card_assets()
+        backgrounds, fonts = card_assets()
         if verse_no:
             vi = (verse_no - 1) % len(VERSES)
         elif randomize:
@@ -3173,11 +3230,15 @@ async def send_test_card(bot, chat_id: int, bg=None, verse_no=None, randomize=Fa
             vi = datetime.now(EAT).date().toordinal() % len(VERSES)
         if bg:
             bi = bg - 1
-        elif randomize and backgrounds:
-            bi = random.randrange(len(backgrounds))
         else:
-            bi = None
-        png, bg_no, bg_total = await asyncio.to_thread(build_card, VERSES[vi], bi)
+            bi = random.randrange(len(backgrounds)) if (randomize and backgrounds) else None
+        if font_no:
+            fi = font_no - 1
+        else:
+            fi = random.randrange(len(fonts)) if (randomize and fonts) else None
+        png, bg_no, bg_total, f_no, f_total = await asyncio.to_thread(
+            build_card, VERSES[vi], bi, fi, card_watermark(bot)
+        )
     except Exception as e:
         logging.warning("Test card failed: %s", e)
         await bot.send_message(chat_id=chat_id, text=f"⚠️ I can't make the card yet: {e}.")
@@ -3186,22 +3247,23 @@ async def send_test_card(bot, chat_id: int, bg=None, verse_no=None, randomize=Fa
         chat_id=chat_id,
         photo=png,
         caption=(
-            f"🧪 Test card · picture {bg_no} of {bg_total} · verse {vi + 1} of {len(VERSES)}\n"
-            "Only you can see this. Nothing was posted."
+            f"🧪 Test card · picture {bg_no} of {bg_total} · font {f_no} of {f_total} · "
+            f"verse {vi + 1} of {len(VERSES)}\nOnly you can see this. Nothing was posted."
         ),
         reply_markup=kb([btn("🔄 Another test", "adm:cardagain")], [btn("🖼 Card menu", "adm:cardnew")]),
     )
 
 
 async def handle_testcard_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """/testcard [picture number] [verse number]: a test card for admins, sent only to them."""
+    """/testcard [picture no.] [verse no.] [font no.]: a test card for admins, sent only to them."""
     if not await _admin_command_guard(update, False):
         return
-    nums = [int(a) for a in context.args[:2] if a.isdigit() and int(a) > 0]
+    nums = [int(a) for a in context.args[:3] if a.isdigit() and int(a) > 0]
     await send_test_card(
         context.bot, update.effective_chat.id,
         bg=nums[0] if len(nums) > 0 else None,
         verse_no=nums[1] if len(nums) > 1 else None,
+        font_no=nums[2] if len(nums) > 2 else None,
     )
 # --- end verse card ---
 
@@ -3258,7 +3320,7 @@ async def send_daily_reminder(context: ContextTypes.DEFAULT_TYPE):
     card = None
     if await card_enabled():
         try:
-            png, _, _ = await asyncio.to_thread(build_card, todays_verse())
+            png = (await asyncio.to_thread(build_card, todays_verse(), None, None, card_watermark(context.bot)))[0]
             card = {"png": png, "file_id": None}
         except Exception as e:
             logging.warning("Verse card not used today, sending text verses: %s", e)
