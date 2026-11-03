@@ -28,6 +28,7 @@ from telegram import (
     BotCommand,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
+    InputMediaPhoto,
     Message,
     ReplyParameters,
     Update,
@@ -114,7 +115,7 @@ fernet = Fernet(base64.urlsafe_b64encode(hashlib.sha256(JOURNAL_SECRET.encode())
 # ---------------------------------------------------------------------------
 # Bible verses live in verses.json (next to this file), not in the code.
 # Each entry looks like this:
-#   {"ref": "Psalm 23:1", "ref_am": "መዝሙር 23:1",
+#   {"ref": "Psalm 23:1", "ref_am": "መዝሙር 23:1", "title_am": "optional heading for the card",
 #    "en": "English text", "am": "Amharic text", "feelings": ["anxious", "afraid"]}
 # To add a verse, add one more entry to verses.json. Nothing here needs to change.
 # English text: World English Bible (WEB), public domain.
@@ -140,6 +141,7 @@ def _load_verses() -> list:
             {
                 "ref": ref,
                 "ref_am": str(item.get("ref_am", "")).strip(),
+                "title_am": str(item.get("title_am", "")).strip(),
                 "en": en,
                 "am": str(item.get("am", "")).strip(),
                 "feelings": [f for f in item.get("feelings", []) if f in FEELINGS],
@@ -767,6 +769,13 @@ CREATE TABLE IF NOT EXISTS settings (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS card_files (
+    id         BIGSERIAL PRIMARY KEY,
+    kind       TEXT NOT NULL,
+    name       TEXT NOT NULL,
+    data       BYTEA NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 """
 
 
@@ -1166,6 +1175,11 @@ async def handle_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
     elif action == "request":
         await show(query, t(lang, "request_prompt"), kb(menu_row(lang)))
+    elif action == "requestnew":
+        # From the daily verse (a photo or text message that must stay in the chat).
+        await context.bot.send_message(
+            chat_id=uid, text=t(lang, "request_prompt"), reply_markup=kb(menu_row_new(lang))
+        )
     elif action == "scripture":
         await show(query, t(lang, "scripture_prompt"), feelings_keyboard(lang))
     elif action == "scripture2":
@@ -1612,6 +1626,13 @@ async def handle_state_message(update: Update, context: ContextTypes.DEFAULT_TYP
             ),
             reply_parameters=ReplyParameters(message_id=message.message_id),
         )
+        return
+
+    # Verse card pictures and fonts sent by the owner (they are not text).
+    if state in ("card_add_bg", "card_add_font") and is_owner(uid):
+        reply = await save_card_upload(message, state)
+        await set_state(uid, state)  # keep waiting, and restart the 30 minutes
+        await message.reply_text(reply, reply_markup=kb([btn("✅ Done", "adm:card")]))
         return
 
     if not message.text:
@@ -2668,24 +2689,7 @@ async def handle_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
             text, markup = admin_home(uid, lang)
             await context.bot.send_message(chat_id=uid, text=text, reply_markup=markup)
 
-    elif action in ("card", "cardnew", "cardtest", "cardagain", "cardtoggle"):
-        if action == "cardtoggle":
-            if not await owner_only():
-                return
-            await set_card_enabled(not await card_enabled())
-        if action == "cardtest":
-            await send_test_card(context.bot, uid, randomize=True)
-        elif action == "cardagain":
-            if not await drop_buttons(query):
-                return
-            await send_test_card(context.bot, uid, randomize=True)
-        elif action == "cardnew":
-            if await drop_buttons(query):
-                text, markup = await card_menu(uid)
-                await context.bot.send_message(chat_id=uid, text=text, reply_markup=markup)
-        else:  # "card" and "cardtoggle" show the card menu in place
-            text, markup = await card_menu(uid)
-            await show(query, text, markup)
+    # (The verse card buttons, adm:card..., are handled by handle_card_callback.)
 
     elif action == "blocked":
         await render_blocked(query, uid, lang)
@@ -2957,219 +2961,497 @@ async def handle_removeadmin_command(update: Update, context: ContextTypes.DEFAU
 # ---------------------------------------------------------------------------
 # Scheduled jobs
 # ---------------------------------------------------------------------------
+
+
 # ---------------------------------------------------------------------------
-# --- verse card: the daily Amharic verse drawn on a picture (PNG) ---
-# Put 1:1 background pictures (png/jpg/webp, any number, 7 = one per weekday) and ONE
-# font file (.ttf/.otf, it must have Amharic letters) in a folder called "cards" next
-# to this file. The picture for the day is chosen by rotating through them.
+# Verse card: the daily Amharic verse on a picture (5 designs), tomorrow's preview,
+# test cards and uploads of pictures/fonts inside the bot.
 # ---------------------------------------------------------------------------
 CARD_DIR = Path(__file__).with_name("cards")
 CARD_SIZE = 1080
-CARD_TEXT_COLOR = (255, 255, 255)
-CARD_STROKE_COLOR = (15, 15, 25)
-CARD_STROKE_RATIO = 0.065  # stroke thickness as a share of the letter size (smaller = thinner)
-CARD_PICTURE_OPACITY = 0.82  # 1.0 = picture as it is; lower = softer and darker, text stands out more
 CARD_PICTURE_TYPES = (".png", ".jpg", ".jpeg", ".webp")
+CARD_FONT_TYPES = (".ttf", ".otf")
+GOLD = (245, 196, 81)
+CAPTION_LIMIT = 1024  # Telegram's limit for a photo caption
+UPLOAD_MAX_BYTES = 8 * 1024 * 1024
+MAX_UPLOADS = 60
+PREVIEW_TIME_UTC = dtime(hour=17, minute=0, tzinfo=timezone.utc)  # 20:00 EAT, the evening before
 
 
-def card_assets():
-    """(background pictures, font files) from the cards folder. Either can be empty."""
+class CardFile:
+    """A background picture or a font, from the cards folder (path) or the database (data)."""
+
+    def __init__(self, name, path=None, data=None, db_id=None):
+        self.name, self.path, self.data, self.db_id = name, path, data, db_id
+
+    def font(self, px):
+        import io
+        from PIL import ImageFont
+
+        return ImageFont.truetype(str(self.path) if self.path else io.BytesIO(self.data), px)
+
+    def image(self):
+        import io
+        from PIL import Image
+
+        return Image.open(self.path if self.path else io.BytesIO(self.data))
+
+
+def folder_card_assets():
     if not CARD_DIR.is_dir():
         return [], []
     files = sorted((p for p in CARD_DIR.iterdir() if p.is_file()), key=lambda p: p.name.lower())
-    backgrounds = [p for p in files if p.suffix.lower() in CARD_PICTURE_TYPES]
-    fonts = [p for p in files if p.suffix.lower() in (".ttf", ".otf")]
+    backgrounds = [CardFile(p.name, path=p) for p in files if p.suffix.lower() in CARD_PICTURE_TYPES]
+    fonts = [CardFile(p.name, path=p) for p in files if p.suffix.lower() in CARD_FONT_TYPES]
     return backgrounds, fonts
 
 
-def card_fallback_font():
-    """A font for letters the Amharic font lacks (the digits and ':' in 'መዝሙር 23:1') and
-    for the @username watermark: the DejaVu Sans Bold shipped in the bot's fonts folder."""
+async def card_assets(with_data: bool = True):
+    """(background pictures, fonts): the cards folder first, then the files uploaded in the bot."""
+    backgrounds, fonts = folder_card_assets()
+    columns = "id, kind, name, data" if with_data else "id, kind, name"
+    for r in await db("fetch", f"SELECT {columns} FROM card_files ORDER BY id"):
+        item = CardFile(r["name"], data=bytes(r["data"]) if with_data else None, db_id=r["id"])
+        (backgrounds if r["kind"] == "bg" else fonts).append(item)
+    return backgrounds, fonts
+
+
+def card_latin_font():
+    """A font for digits, ':' and the @username (the Amharic font usually lacks them):
+    the DejaVu Sans Bold shipped in the bot's fonts folder."""
     found = []
     for folder in FONT_DIRS:
         found += [p for p in folder.glob("*.ttf") if "dejavu" in p.name.lower()]
     found.sort(key=lambda p: ("bold" not in p.name.lower(), "mono" in p.name.lower(), "serif" in p.name.lower(), p.name))
-    return found[0] if found else None
-
-
-def todays_verse() -> dict:
-    return VERSES[datetime.now(EAT).date().toordinal() % len(VERSES)]
+    return CardFile(found[0].name, path=found[0]) if found else None
 
 
 def card_watermark(bot):
-    """'@botusername' for the corner of the card (None if the bot has no username yet)."""
+    """'@botusername' for the card (None if the bot has no username yet)."""
     try:
         return f"@{bot.username}" if bot.username else None
     except RuntimeError:
         return None
 
 
-def telegram_icon(px: int):
-    """A small Telegram-style logo (blue circle, white paper plane), drawn with shapes."""
+def day_number(offset: int = 0) -> int:
+    return datetime.now(EAT).date().toordinal() + offset
+
+
+def verse_for_day(day: int) -> dict:
+    return VERSES[day % len(VERSES)]  # same rule as daily_verse()
+
+
+def verse_caption(verse: dict) -> str:
+    """Channel caption / text post: good morning + the verse in English and Amharic."""
+    en, am = verse_block("en", verse), verse_block("am", verse)
+    text = "🌅 Good morning · እንደምን አደሩ!\n\n" + en
+    if am != en:
+        text += "\n\n" + am
+    return text
+
+
+# ---------------------------------------------------------------------------
+# Drawing helpers
+# ---------------------------------------------------------------------------
+def glyph_has(font, ch: str) -> bool:
+    """True if the font really has this letter (a missing letter draws as an empty box)."""
     from PIL import Image, ImageDraw
 
-    k = 4  # draw big, then shrink, for smooth edges
-    big = px * k
-    icon = Image.new("RGBA", (big, big), (0, 0, 0, 0))
-    d = ImageDraw.Draw(icon)
-    sc = big / 100
+    n = int(getattr(font, "size", 40)) * 2
 
-    def pts(*xy):
-        return [(x * sc, y * sc) for x, y in xy]
+    def look(c):
+        probe = Image.new("L", (n, n), 0)
+        ImageDraw.Draw(probe).text((8, 8), c, font=font, fill=255)
+        return probe.tobytes()
 
-    d.ellipse([0, 0, big - 1, big - 1], fill=(42, 171, 238, 255))
-    d.polygon(pts((21, 48), (77, 26), (65, 74), (47, 58)), fill=(255, 255, 255, 255))
-    d.polygon(pts((47, 58), (40, 69), (38, 55)), fill=(255, 255, 255, 255))
-    d.polygon(pts((77, 26), (47, 58), (40, 69), (52, 61)), fill=(205, 222, 236, 255))
-    icon = icon.resize((px, px), Image.LANCZOS)
-    icon.putalpha(icon.getchannel("A").point(lambda a: int(a * 0.9)))
-    return icon
+    return look(ch) != look("\U0010FFFF")
 
 
-def draw_card_watermark(img, handle: str, font_path):
-    """Small Telegram logo + @username, centered near the bottom, slightly see-through."""
-    from PIL import Image, ImageDraw, ImageFont
+class Ink:
+    """The fonts of one card: the main (Amharic) font, and a Latin font that is used
+    for letters the main font lacks (digits, ':') and for the @username."""
 
-    S = img.width
-    f = ImageFont.truetype(str(font_path), 30)
-    icon_px, gap = 44, 12
-    layer = Image.new("RGBA", img.size, (0, 0, 0, 0))
-    d = ImageDraw.Draw(layer)
-    x0 = (S - (icon_px + gap + d.textlength(handle, font=f))) / 2
-    cy = S - 62
-    layer.paste(telegram_icon(icon_px), (round(x0), round(cy - icon_px / 2)))
-    d.text(
-        (x0 + icon_px + gap, cy), handle, font=f, fill=(255, 255, 255, 215), anchor="lm",
-        stroke_width=2, stroke_fill=(15, 15, 25, 170),
-    )
+    def __init__(self, main, latin=None):
+        self.main, self.latin = main, latin
+        self._fonts, self._has = {}, {}
+
+    def font(self, px, latin=False):
+        item = self.latin if (latin and self.latin) else self.main
+        key = (id(item), px)
+        if key not in self._fonts:
+            self._fonts[key] = item.font(px)
+        return self._fonts[key]
+
+    def has(self, px, ch):
+        key = (px, ch)
+        if key not in self._has:
+            self._has[key] = ch.isspace() or glyph_has(self.font(px), ch)
+        return self._has[key]
+
+    def height(self, px):
+        asc, desc = self.font(px).getmetrics()
+        return asc + desc
+
+    def runs(self, s, px, latin=False):
+        if latin or self.latin is None:
+            return [(s, self.font(px, latin))]
+        out = []
+        for ch in s:
+            f = self.font(px) if self.has(px, ch) else self.font(px, True)
+            if out and out[-1][1] is f:
+                out[-1][0] += ch
+            else:
+                out.append([ch, f])
+        return [(a, b) for a, b in out]
+
+
+def text_width(draw, ink, s, px, sw=0, latin=False):
+    return sum(draw.textlength(r, font=f) for r, f in ink.runs(s, px, latin)) + 2 * sw
+
+
+def draw_line(draw, ink, s, px, x, top, align="m", fill=(255, 255, 255), sw=0, stroke=None, latin=False):
+    """One line of text. x is its left / middle / right edge (align l / m / r); top is the top of the line."""
+    runs = ink.runs(s, px, latin)
+    width = sum(draw.textlength(r, font=f) for r, f in runs)
+    x0 = x - width / 2 if align == "m" else x - width if align == "r" else x
+    base = top + ink.font(px, latin).getmetrics()[0]
+    for r, f in runs:
+        draw.text((x0, base), r, font=f, fill=fill, anchor="ls", stroke_width=sw, stroke_fill=stroke)
+        x0 += draw.textlength(r, font=f)
+    return width
+
+
+def wrap_text(draw, ink, text, px, max_w, sw=0):
+    lines, cur = [], ""
+
+    def fits(s):
+        return text_width(draw, ink, s, px, sw) <= max_w
+
+    for word in text.split():
+        trial = f"{cur} {word}".strip()
+        if fits(trial):
+            cur = trial
+            continue
+        if cur:
+            lines.append(cur)
+        if fits(word):
+            cur = word
+        else:  # one very long word: break it by letters
+            piece = ""
+            for ch in word:
+                if fits(piece + ch):
+                    piece += ch
+                else:
+                    lines.append(piece)
+                    piece = ch
+            cur = piece
+    if cur:
+        lines.append(cur)
+    return lines
+
+
+def fit_paragraph(draw, ink, text, max_w, max_h, start=88, minimum=32, stroke_ratio=0.0, spacing=1.18):
+    """Biggest text size (down to `minimum`) whose wrapped lines fit max_w x max_h."""
+    size = start
+    while True:
+        sw = max(2, round(size * stroke_ratio)) if stroke_ratio else 0
+        lines = wrap_text(draw, ink, text, size, max_w, sw)
+        line_h = round(ink.height(size) * spacing)
+        if len(lines) * line_h <= max_h or size <= minimum:
+            return size, sw, lines, line_h
+        size -= 4
+
+
+def _paste_layer(img, layer):
+    from PIL import Image
+
     img.paste(Image.alpha_composite(img.convert("RGBA"), layer).convert("RGB"))
 
 
-def render_verse_card(text: str, reference: str, background, font_path, watermark=None) -> bytes:
-    """Draw the verse (centered, auto-sized to fit) and its reference with a stroke
-    on the picture, plus the small watermark. Returns PNG bytes."""
+def _shade(img, along, alpha_at, color=(8, 10, 20)):
+    """Darken the picture with a gradient. along = 'y' (top to bottom) or 'x' (left to right);
+    alpha_at(t) gives the darkness 0..1 for t from 0 to 1."""
+    from PIL import Image
+
+    n = img.width
+    strip = Image.new("L", (1, n) if along == "y" else (n, 1))
+    strip.putdata([max(0, min(255, round(255 * alpha_at(i / (n - 1))))) for i in range(n)])
+    return Image.composite(Image.new("RGB", img.size, color), img, strip.resize(img.size))
+
+
+def _glass(img, box, radius, blur=26, darken=0.30, tint=0.10, border=170):
+    """Frosted-glass panel: the picture behind the box is blurred, darkened a little, tinted, outlined."""
+    from PIL import Image, ImageDraw, ImageFilter
+
+    x0, y0, x1, y1 = [round(v) for v in box]
+    w, h = x1 - x0, y1 - y0
+    region = img.filter(ImageFilter.GaussianBlur(blur)).crop((x0, y0, x1, y1))
+    region = Image.blend(region, Image.new("RGB", (w, h), (10, 12, 24)), darken)
+    region = Image.blend(region, Image.new("RGB", (w, h), (255, 255, 255)), tint)
+    big = Image.new("L", (w * 3, h * 3), 0)
+    ImageDraw.Draw(big).rounded_rectangle([0, 0, w * 3 - 1, h * 3 - 1], radius=radius * 3, fill=255)
+    img.paste(region, (x0, y0), big.resize((w, h), Image.LANCZOS))
+    layer = Image.new("RGBA", img.size, (0, 0, 0, 0))
+    ImageDraw.Draw(layer).rounded_rectangle([x0, y0, x1, y1], radius=radius, outline=(255, 255, 255, border), width=3)
+    _paste_layer(img, layer)
+
+
+def _footer(img, ink, handle, top, align="m", x=None):
+    """The bot's @username and its t.me link (two small lines)."""
+    if not handle:
+        return
+    from PIL import Image, ImageDraw
+
+    layer = Image.new("RGBA", img.size, (0, 0, 0, 0))
+    d = ImageDraw.Draw(layer)
+    x = img.width / 2 if x is None else x
+    draw_line(d, ink, handle, 32, x, top, align, (255, 255, 255, 235), 2, (10, 12, 24, 150), latin=True)
+    draw_line(d, ink, "t.me/" + handle.lstrip("@"), 25, x, top + 40, align, (214, 226, 240, 205), 2, (10, 12, 24, 150), latin=True)
+    _paste_layer(img, layer)
+
+
+# ---------------------------------------------------------------------------
+# The 5 designs. Each gets the picture (1080x1080), c = {text, ref, title, handle}, ink.
+# ---------------------------------------------------------------------------
+def _design_glass(img, c, ink):
+    """1. Glass: a frosted rounded card in the middle (title, verse, reference)."""
+    from PIL import Image, ImageDraw
+
+    S = img.width
+    img = Image.blend(img, Image.new("RGB", img.size, (0, 0, 0)), 0.16)
+    d = ImageDraw.Draw(img)
+    pad, box_w, title_px, ref_px = 60, 860, 54, 40
+    title_h = round(ink.height(title_px) * 1.25) + 20 if c["title"] else 0
+    ref_h = round(ink.height(ref_px) * 1.2) + 34
+    size, _, lines, line_h = fit_paragraph(d, ink, c["text"], box_w - 2 * pad, 700 - 2 * pad - title_h - ref_h, start=62, minimum=30)
+    box_h = 2 * pad + title_h + len(lines) * line_h + ref_h
+    x0, y0 = (S - box_w) / 2, (S - box_h) / 2 - 36
+    _glass(img, (x0, y0, x0 + box_w, y0 + box_h), 64)
+    d = ImageDraw.Draw(img)
+    y = y0 + pad
+    if c["title"]:
+        draw_line(d, ink, c["title"], title_px, S / 2, y, "m", (255, 255, 255), 1, (255, 255, 255))
+        y += title_h
+    for line in lines:
+        draw_line(d, ink, line, size, S / 2, y, "m", (242, 246, 252))
+        y += line_h
+    draw_line(d, ink, c["ref"], ref_px, S / 2, y + 34, "m", (196, 212, 232))
+    _footer(img, ink, c["handle"], S - 128)
+    return img
+
+
+def _design_sheet(img, c, ink):
+    """2. Sheet: the picture stays clear on top; a frosted panel rises from the bottom."""
+    from PIL import ImageDraw
+
+    S = img.width
+    margin, pad, title_px, ref_px = 40, 54, 44, 38
+    d = ImageDraw.Draw(img)
+    title_h = round(ink.height(title_px) * 1.2) + 14 if c["title"] else 0
+    ref_h = round(ink.height(ref_px) * 1.2)
+    fixed = (pad - 10) + 28 + title_h + 26 + ref_h + 22 + 1 + 18 + 76 + 32
+    size, _, lines, line_h = fit_paragraph(d, ink, c["text"], S - 2 * margin - 2 * pad, 790 - fixed, start=58, minimum=30)
+    box_h = fixed + len(lines) * line_h
+    x0, y0, x1, y1 = margin, S - margin - box_h, S - margin, S - margin
+    _glass(img, (x0, y0, x1, y1), 54, darken=0.40, tint=0.06)
+    d = ImageDraw.Draw(img)
+    y = y0 + pad - 10
+    d.rounded_rectangle([S / 2 - 42, y, S / 2 + 42, y + 6], radius=3, fill=GOLD)
+    y += 28
+    if c["title"]:
+        draw_line(d, ink, c["title"], title_px, S / 2, y, "m", GOLD, 1, GOLD)
+        y += title_h
+    for line in lines:
+        draw_line(d, ink, line, size, S / 2, y, "m", (255, 255, 255))
+        y += line_h
+    y += 26
+    draw_line(d, ink, c["ref"], ref_px, S / 2, y, "m", (200, 214, 232))
+    y += ref_h + 22
+    d.line([(x0 + pad, y), (x1 - pad, y)], fill=(110, 122, 142), width=1)
+    _footer(img, ink, c["handle"], y + 19)
+    return img
+
+
+def _design_poster(img, c, ink):
+    """3. Poster: dark vignette, big outlined text, gold ornament line above the reference."""
+    from PIL import ImageDraw
+
+    S = img.width
+    img = _shade(img, "y", lambda t: 0.40 + 0.40 * (abs(t - 0.5) * 2) ** 2)
+    d = ImageDraw.Draw(img)
+    ref_px = 46
+    ref_h = round(ink.height(ref_px) * 1.2)
+    size, sw, lines, line_h = fit_paragraph(d, ink, c["text"], S - 220, 520, start=92, minimum=34, stroke_ratio=0.06)
+    block_h = len(lines) * line_h + 40 + 22 + 30 + ref_h
+    y = (S - block_h) / 2 + (14 if c["title"] else 0)
+    if c["title"]:
+        draw_line(d, ink, c["title"], 46, S / 2, 118, "m", GOLD, 2, (15, 15, 25))
+    for line in lines:
+        draw_line(d, ink, line, size, S / 2, y, "m", (255, 255, 255), sw, (15, 15, 25))
+        y += line_h
+    oy = y + 40
+    d.line([(S / 2 - 190, oy), (S / 2 - 26, oy)], fill=GOLD, width=3)
+    d.line([(S / 2 + 26, oy), (S / 2 + 190, oy)], fill=GOLD, width=3)
+    d.polygon([(S / 2, oy - 11), (S / 2 + 11, oy), (S / 2, oy + 11), (S / 2 - 11, oy)], fill=GOLD)
+    draw_line(d, ink, c["ref"], ref_px, S / 2, oy + 30, "m", (255, 255, 255), 3, (15, 15, 25))
+    _footer(img, ink, c["handle"], S - 130)
+    return img
+
+
+def _design_bar(img, c, ink):
+    """4. Side bar: dark fade from the left, left-aligned text next to a gold bar and a big quote mark."""
+    from PIL import Image, ImageDraw
+
+    S = img.width
+    img = Image.blend(img, Image.new("RGB", img.size, (0, 0, 0)), 0.14)
+    img = _shade(img, "x", lambda t: max(0.0, 0.92 - 1.15 * t))
+    d = ImageDraw.Draw(img)
+    left, text_w, title_px, ref_px = 130, 600, 44, 40
+    title_h = round(ink.height(title_px) * 1.2) + 14 if c["title"] else 0
+    ref_h = round(ink.height(ref_px) * 1.2)
+    size, _, lines, line_h = fit_paragraph(d, ink, c["text"], text_w, 560 - title_h - ref_h - 30, start=66, minimum=30)
+    block_h = title_h + len(lines) * line_h + 30 + ref_h
+    y0 = (S - block_h) / 2 - 20
+    d.rounded_rectangle([left - 40, y0, left - 32, y0 + block_h], radius=4, fill=GOLD)
+    if ink.latin:
+        draw_line(d, ink, "\u201C", 170, left - 48, y0 - 118, "l", GOLD, latin=True)
+    y = y0
+    if c["title"]:
+        draw_line(d, ink, c["title"], title_px, left, y, "l", GOLD, 1, GOLD)
+        y += title_h
+    for line in lines:
+        draw_line(d, ink, line, size, left, y, "l", (255, 255, 255), 2, (10, 12, 24))
+        y += line_h
+    draw_line(d, ink, "\u2014 " + c["ref"], ref_px, left, y + 30, "l", (225, 232, 242), 2, (10, 12, 24))
+    _footer(img, ink, c["handle"], S - 130, "l", left - 40)
+    return img
+
+
+def _design_frame(img, c, ink):
+    """5. Frame: dimmed picture, double frame with gold corners, glowing verse, reference in a pill."""
+    from PIL import Image, ImageDraw, ImageFilter
+
+    S = img.width
+    img = Image.blend(img, Image.new("RGB", img.size, (0, 0, 0)), 0.44)
+    layer = Image.new("RGBA", img.size, (0, 0, 0, 0))
+    ld = ImageDraw.Draw(layer)
+    ld.rectangle([44, 44, S - 44, S - 44], outline=(255, 255, 255, 215), width=3)
+    ld.rectangle([62, 62, S - 62, S - 62], outline=(255, 255, 255, 120), width=1)
+    for cx, cy in ((44, 44), (S - 44, 44), (44, S - 44), (S - 44, S - 44)):
+        ld.polygon([(cx, cy - 13), (cx + 13, cy), (cx, cy + 13), (cx - 13, cy)], fill=GOLD + (255,))
+    _paste_layer(img, layer)
+    d = ImageDraw.Draw(img)
+    title_px, ref_px = 46, 40
+    title_h = round(ink.height(title_px) * 1.2) + 16 if c["title"] else 0
+    ref_h = round(ink.height(ref_px) * 1.2)
+    pill_h = ref_h + 22
+    size, _, lines, line_h = fit_paragraph(d, ink, c["text"], S - 260, 540, start=74, minimum=32)
+    block_h = title_h + len(lines) * line_h + 36 + pill_h
+    y = 190 + (680 - block_h) / 2
+    # soft glow behind the verse
+    glow = Image.new("RGBA", img.size, (255, 255, 255, 0))
+    gd, yy = ImageDraw.Draw(glow), y + title_h
+    for line in lines:
+        draw_line(gd, ink, line, size, S / 2, yy, "m", (255, 255, 255, 200))
+        yy += line_h
+    _paste_layer(img, glow.filter(ImageFilter.GaussianBlur(14)))
+    d = ImageDraw.Draw(img)
+    if c["title"]:
+        draw_line(d, ink, c["title"], title_px, S / 2, y, "m", GOLD, 1, GOLD)
+        y += title_h
+    for line in lines:
+        draw_line(d, ink, line, size, S / 2, y, "m", (255, 255, 255))
+        y += line_h
+    y += 36
+    pw = text_width(d, ink, c["ref"], ref_px) + 72
+    d.rounded_rectangle([S / 2 - pw / 2, y, S / 2 + pw / 2, y + pill_h], radius=pill_h / 2, outline=GOLD, width=2)
+    draw_line(d, ink, c["ref"], ref_px, S / 2, y + 11, "m", (235, 240, 248))
+    _footer(img, ink, c["handle"], S - 168)
+    return img
+
+
+DESIGNS = [
+    ("Glass", _design_glass),
+    ("Sheet", _design_sheet),
+    ("Poster", _design_poster),
+    ("Side bar", _design_bar),
+    ("Frame", _design_frame),
+]
+
+
+def render_verse_card(verse, background, main_font, latin_font, design, handle=None) -> bytes:
+    """Draw one card (JPEG bytes). background / main_font / latin_font are CardFile items."""
     import io
-    from PIL import Image, ImageDraw, ImageFont, ImageOps
+    from PIL import Image, ImageOps
 
     S = CARD_SIZE
-    img = ImageOps.fit(Image.open(background).convert("RGB"), (S, S), Image.LANCZOS)
-    if CARD_PICTURE_OPACITY < 1:
-        img = Image.blend(Image.new("RGB", (S, S), (0, 0, 0)), img, CARD_PICTURE_OPACITY)
-    draw = ImageDraw.Draw(img)
-    margin = 100
-    max_w = S - 2 * margin
-    max_h = S - 2 * margin - 160  # leaves room for the reference line and the watermark
-
-    def load(px):
-        return ImageFont.truetype(str(font_path), px)
-
-    def stroke_for(px):
-        return max(2, round(px * CARD_STROKE_RATIO))
-
-    def fits(s, f, sw):
-        return draw.textlength(s, font=f) + 2 * sw <= max_w
-
-    def wrap(f, sw):
-        lines, cur = [], ""
-        for word in text.split():
-            trial = f"{cur} {word}".strip()
-            if fits(trial, f, sw):
-                cur = trial
-                continue
-            if cur:
-                lines.append(cur)
-            if fits(word, f, sw):
-                cur = word
-            else:  # one very long word: break it by letters
-                piece = ""
-                for ch in word:
-                    if fits(piece + ch, f, sw):
-                        piece += ch
-                    else:
-                        lines.append(piece)
-                        piece = ch
-                cur = piece
-        if cur:
-            lines.append(cur)
-        return lines
-
-    size = 96
-    while True:
-        f, sw = load(size), stroke_for(size)
-        lines = wrap(f, sw)
-        asc, desc = f.getmetrics()
-        line_h = round((asc + desc) * 1.12)
-        if len(lines) * line_h <= max_h or size <= 32:
-            break
-        size -= 4
-
-    ref_size = max(32, round(size * 0.6))
-    rf, rsw = load(ref_size), stroke_for(ref_size)
-    ras, rds = rf.getmetrics()
-    fb_path = card_fallback_font()
-    fb = ImageFont.truetype(str(fb_path), ref_size) if fb_path else None
-
-    def glyph_look(ch):
-        probe = Image.new("L", (ref_size * 2, ref_size * 2), 0)
-        ImageDraw.Draw(probe).text((8, 8), ch, font=rf, fill=255)
-        return probe.tobytes()
-
-    notdef = glyph_look("\U0010FFFF")  # what a letter missing from the font looks like
-
-    def has_glyph(ch):
-        return ch.isspace() or glyph_look(ch) != notdef
-
-    def draw_reference(cx, top):
-        """Letters the Amharic font lacks (digits, ':') use the fallback font."""
-        runs = []
-        for ch in reference:
-            use = rf if (fb is None or has_glyph(ch)) else fb
-            if runs and runs[-1][1] is use:
-                runs[-1][0] += ch
-            else:
-                runs.append([ch, use])
-        x = cx - sum(draw.textlength(r[0], font=r[1]) for r in runs) / 2
-        for run_text, run_font in runs:
-            draw.text(
-                (x, top + ras), run_text, font=run_font, fill=CARD_TEXT_COLOR, anchor="ls",
-                stroke_width=rsw, stroke_fill=CARD_STROKE_COLOR,
-            )
-            x += draw.textlength(run_text, font=run_font)
-
-    gap = round(size * 0.6)
-    y = (S - 70 - (len(lines) * line_h + gap + ras + rds)) / 2
-    for line in lines:
-        draw.text(
-            (S / 2, y), line, font=f, fill=CARD_TEXT_COLOR, anchor="mt",
-            stroke_width=sw, stroke_fill=CARD_STROKE_COLOR,
-        )
-        y += line_h
-    draw_reference(S / 2, y + gap)
-    if watermark:
-        draw_card_watermark(img, watermark, fb_path or font_path)
+    img = ImageOps.fit(ImageOps.exif_transpose(background.image()).convert("RGB"), (S, S), Image.LANCZOS)
+    c = {
+        "text": verse["am"],
+        "ref": verse["ref_am"] or verse["ref"],
+        "title": verse.get("title_am", ""),
+        "handle": handle,
+    }
+    img = DESIGNS[design % len(DESIGNS)][1](img, c, Ink(main_font, latin_font))
     buf = io.BytesIO()
-    img.save(buf, format="PNG", optimize=True)
+    img.save(buf, format="JPEG", quality=93, optimize=True)
     return buf.getvalue()
 
 
-def build_card(verse: dict, bg_index=None, font_index=None, watermark=None):
-    """PNG for a verse. The picture and the font rotate day by day (so the pairs keep
-    changing). Returns (png, picture no., pictures found, font no., fonts found).
-    Raises RuntimeError with a plain reason if it can't be made."""
-    backgrounds, fonts = card_assets()
-    if not backgrounds:
-        raise RuntimeError("there are no background pictures in the cards folder")
-    if not fonts:
-        raise RuntimeError("there is no .ttf/.otf font file in the cards folder")
+# ---------------------------------------------------------------------------
+# Which picture / font / design today, and tomorrow's preview
+# ---------------------------------------------------------------------------
+def rotation(day: int, n: int) -> int:
+    """0,1,2..n-1, then 1,2,..: after each full round the start shifts by one, so the
+    pairs (picture + design) keep changing."""
+    return (day + day // n) % n
+
+
+def card_choice(day: int, nb: int, nf: int, override=None):
+    o = override or {}
+    bi = int(o["bi"]) % nb if "bi" in o else rotation(day, nb)
+    fi = int(o["fi"]) % nf if "fi" in o else rotation(day, nf)
+    di = int(o["di"]) % len(DESIGNS) if "di" in o else day % len(DESIGNS)
+    return bi, fi, di
+
+
+async def get_override(day: int):
+    raw = await db("fetchval", "SELECT value FROM settings WHERE key = 'card_override'")
+    try:
+        o = json.loads(raw) if raw else None
+    except ValueError:
+        return None
+    return o if isinstance(o, dict) and o.get("day") == day else None
+
+
+async def set_override(day: int, bi: int, fi: int, di: int):
+    await db(
+        "execute",
+        "INSERT INTO settings (key, value) VALUES ('card_override', $1) "
+        "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
+        json.dumps({"day": day, "bi": bi, "fi": fi, "di": di}),
+    )
+
+
+async def make_card(bot, day: int) -> dict:
+    """The card for a day (JPEG bytes + what was used). Raises RuntimeError with a plain reason."""
+    verse = verse_for_day(day)
     if not verse["am"]:
         raise RuntimeError(f"{verse['ref']} has no Amharic text in verses.json")
-    day = datetime.now(EAT).date().toordinal()
-    bi = (day if bg_index is None else bg_index) % len(backgrounds)
-    fi = (day if font_index is None else font_index) % len(fonts)
-    png = render_verse_card(
-        verse["am"], verse["ref_am"] or verse["ref"], backgrounds[bi], fonts[fi], watermark
+    backgrounds, fonts = await card_assets()
+    if not backgrounds:
+        raise RuntimeError("there are no background pictures yet")
+    if not fonts:
+        raise RuntimeError("there is no font yet (it must have Amharic letters)")
+    bi, fi, di = card_choice(day, len(backgrounds), len(fonts), await get_override(day))
+    png = await asyncio.to_thread(
+        render_verse_card, verse, backgrounds[bi], fonts[fi], card_latin_font(), di, card_watermark(bot)
     )
-    return png, bi + 1, len(backgrounds), fi + 1, len(fonts)
+    return {
+        "png": png, "file_id": None, "bi": bi, "nb": len(backgrounds),
+        "fi": fi, "nf": len(fonts), "di": di,
+    }  # fmt: skip
 
 
 async def card_enabled() -> bool:
@@ -3186,76 +3468,152 @@ async def set_card_enabled(on: bool):
 
 
 async def send_card(bot, chat_id, card: dict, caption: str, markup=None):
-    """Send the picture. The first send uploads it; later sends reuse Telegram's copy
-    (file_id), so the picture is uploaded only once a day. Raises TelegramError."""
+    """Send the picture with its caption and buttons. The first send uploads it; later sends
+    reuse Telegram's copy (file_id). A caption over Telegram's 1024 limit goes in a second message."""
+    long = len(caption) > CAPTION_LIMIT
     msg = await bot.send_photo(
-        chat_id=chat_id, photo=card["file_id"] or card["png"], caption=caption, reply_markup=markup
+        chat_id=chat_id,
+        photo=card["file_id"] or card["png"],
+        caption=None if long else caption,
+        reply_markup=None if long else markup,
     )
     if card["file_id"] is None and msg.photo:
         card["file_id"] = msg.photo[-1].file_id
+    if long:
+        await bot.send_message(chat_id=chat_id, text=caption, reply_markup=markup)
 
 
+async def send_preview(bot, chat_id: int, day: int):
+    """Show what will be posted on `day` at 6:30 AM: the picture (if the card is ON) and the caption."""
+    verse = verse_for_day(day)
+    when = date.fromordinal(day).strftime("%a %d %b")
+    head = f"📅 Post for {when} · 6:30 AM EAT"
+    caption = verse_caption(verse)
+    card, problem = None, None
+    if await card_enabled():
+        try:
+            card = await make_card(bot, day)
+            # Lock this choice in, so files added later tonight don't change it.
+            await set_override(day, card["bi"], card["fi"], card["di"])
+        except Exception as e:
+            logging.warning("Preview card failed: %s", e)
+            problem = str(e)
+    if card:
+        await bot.send_photo(
+            chat_id=chat_id,
+            photo=card["png"],
+            caption=(
+                f"{head}\n🎨 Design {card['di'] + 1} ({DESIGNS[card['di']][0]}) · picture {card['bi'] + 1} of "
+                f"{card['nb']} · font {card['fi'] + 1} of {card['nf']}\n📖 {verse['ref']}"
+            ),
+        )
+        await bot.send_message(
+            chat_id=chat_id,
+            text="💬 Caption posted with it (channel). The bot sends the same verse with the good-morning "
+            "text in each person's language.\n\n" + caption,
+            reply_markup=kb(
+                [btn("🔄 Another look", f"adm:cardlook:{day}")],
+                [btn("🖼 Card menu", "adm:cardnew")],
+            ),
+        )
+    else:
+        note = (
+            "🖼 The verse card is OFF, so the text verse is posted."
+            if problem is None
+            else f"⚠️ The card can't be made ({problem}), so the text verse is posted."
+        )
+        await bot.send_message(
+            chat_id=chat_id,
+            text=f"{head}\n{note}\n\n{caption}",
+            reply_markup=kb([btn("🖼 Card menu", "adm:cardnew")]),
+        )
+
+
+async def send_tomorrow_preview(context: ContextTypes.DEFAULT_TYPE):
+    """20:00 EAT: tell the owner what goes out tomorrow morning."""
+    try:
+        await send_preview(context.bot, OWNER_ID, day_number(1))
+    except TelegramError as e:
+        logging.warning("Tomorrow's preview could not be sent: %s", e)
+
+
+async def handle_preview_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/preview: what will be posted tomorrow morning (admins)."""
+    if await _admin_command_guard(update, False):
+        await send_preview(context.bot, update.effective_chat.id, day_number(1))
+
+
+# ---------------------------------------------------------------------------
+# Admin: card menu, test cards, uploads
+# ---------------------------------------------------------------------------
 async def card_menu(uid: int):
-    backgrounds, fonts = card_assets()
+    backgrounds, fonts = await card_assets(with_data=False)
     on = await card_enabled()
-    names = ", ".join(f.name for f in fonts[:6]) if fonts else "missing"
+    uploaded = sum(1 for x in backgrounds + fonts if x.db_id)
     text = (
         "🖼 Verse card\n\n"
         f"Status: {'ON ✅' if on else 'OFF'}\n"
-        f"Background pictures: {len(backgrounds)}\n"
-        f"Fonts: {len(fonts)} ({names})\n\n"
-        "ON: at 6:30 AM the channel gets the Amharic verse as a picture, and so do "
-        "Amharic users who haven't joined the channel. OFF: the text verse is posted as before.\n"
-        "Pictures and fonts rotate daily. Test cards are only sent to you, never to the channel."
+        f"Designs: {len(DESIGNS)} ({', '.join(n for n, _ in DESIGNS)}), one per day in turn\n"
+        f"Pictures: {len(backgrounds)} · Fonts: {len(fonts)} ({uploaded} uploaded in the bot)\n\n"
+        "ON: at 6:30 AM the channel gets the verse as a picture with its caption, and so do Amharic "
+        "users who haven't joined the channel. OFF: the text verse is posted.\n"
+        "At 20:00 you get a preview of tomorrow's post.\n"
+        "Add pictures and fonts below (no code change, no redeploy) or in the cards folder."
     )
-    missing = [x for x, ok in (("background pictures", backgrounds), ("a font file", fonts)) if not ok]
+    missing = [x for x, ok in (("pictures", backgrounds), ("a font", fonts)) if not ok]
     if missing:
-        text += "\n\n⚠️ Missing in the cards folder: " + " and ".join(missing)
-    rows = [[btn("🧪 Test card", "adm:cardtest")]]
+        text += "\n\n⚠️ Missing: " + " and ".join(missing)
+    rows = [[btn("🧪 Test all 5 designs", "adm:cardtest")], [btn("📅 Preview tomorrow", "adm:cardprev")]]
     if is_owner(uid):
+        rows.append([btn("➕ Add picture", "adm:cardaddbg"), btn("➕ Add font", "adm:cardaddfont")])
+        rows.append([btn("🗂 Uploaded files", "adm:cardfiles")])
         rows.append([btn("Turn OFF" if on else "Turn ON (go live)", "adm:cardtoggle")])
     rows.append([btn(t(ADMIN_LANG, "b_back"), "adm:home")])
     return text, InlineKeyboardMarkup(rows)
 
 
 async def send_test_card(bot, chat_id: int, bg=None, verse_no=None, font_no=None, randomize=False):
-    """Send a test card to ONE admin only. bg / verse_no / font_no are 1-based."""
+    """Send ALL the designs to ONE admin only (same verse and font, a different picture for each).
+    bg / verse_no / font_no are 1-based."""
     try:
-        backgrounds, fonts = card_assets()
+        backgrounds, fonts = await card_assets()
+        if not backgrounds or not fonts:
+            raise RuntimeError("add at least one picture and one font first")
         if verse_no:
             vi = (verse_no - 1) % len(VERSES)
-        elif randomize:
+        else:
             vi = random.choice([i for i, v in enumerate(VERSES) if v["am"]] or [0])
-        else:
-            vi = datetime.now(EAT).date().toordinal() % len(VERSES)
-        if bg:
-            bi = bg - 1
-        else:
-            bi = random.randrange(len(backgrounds)) if (randomize and backgrounds) else None
-        if font_no:
-            fi = font_no - 1
-        else:
-            fi = random.randrange(len(fonts)) if (randomize and fonts) else None
-        png, bg_no, bg_total, f_no, f_total = await asyncio.to_thread(
-            build_card, VERSES[vi], bi, fi, card_watermark(bot)
-        )
+        verse = VERSES[vi]
+        if not verse["am"]:
+            raise RuntimeError(f"{verse['ref']} has no Amharic text in verses.json")
+        start = (bg - 1) if bg else random.randrange(len(backgrounds))
+        fi = ((font_no - 1) if font_no else random.randrange(len(fonts))) % len(fonts)
+        handle, latin = card_watermark(bot), card_latin_font()
+        media, names = [], []
+        for di, (name, _) in enumerate(DESIGNS):
+            bi = (start + di) % len(backgrounds)
+            png = await asyncio.to_thread(render_verse_card, verse, backgrounds[bi], fonts[fi], latin, di, handle)
+            label = f"{di + 1}. {name} · picture {bi + 1}/{len(backgrounds)}"
+            media.append(InputMediaPhoto(media=png, caption=label))
+            names.append(label)
     except Exception as e:
-        logging.warning("Test card failed: %s", e)
-        await bot.send_message(chat_id=chat_id, text=f"⚠️ I can't make the card yet: {e}.")
+        logging.warning("Test cards failed: %s", e)
+        await bot.send_message(chat_id=chat_id, text=f"⚠️ I can't make the cards yet: {e}.")
         return
-    await bot.send_photo(
+    await bot.send_media_group(chat_id=chat_id, media=media)
+    await bot.send_message(
         chat_id=chat_id,
-        photo=png,
-        caption=(
-            f"🧪 Test card · picture {bg_no} of {bg_total} · font {f_no} of {f_total} · "
-            f"verse {vi + 1} of {len(VERSES)}\nOnly you can see this. Nothing was posted."
+        text=(
+            f"🧪 Test cards · font {fi + 1} of {len(fonts)} ({fonts[fi].name}) · verse {vi + 1} of {len(VERSES)}\n"
+            + "\n".join(names)
+            + "\n\nOnly you can see these. Nothing was posted. Each day uses the next design in turn."
         ),
         reply_markup=kb([btn("🔄 Another test", "adm:cardagain")], [btn("🖼 Card menu", "adm:cardnew")]),
     )
 
 
 async def handle_testcard_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """/testcard [picture no.] [verse no.] [font no.]: a test card for admins, sent only to them."""
+    """/testcard [first picture no.] [verse no.] [font no.]: all designs, sent only to the admin."""
     if not await _admin_command_guard(update, False):
         return
     nums = [int(a) for a in context.args[:3] if a.isdigit() and int(a) > 0]
@@ -3264,7 +3622,133 @@ async def handle_testcard_command(update: Update, context: ContextTypes.DEFAULT_
         bg=nums[0] if len(nums) > 0 else None,
         verse_no=nums[1] if len(nums) > 1 else None,
         font_no=nums[2] if len(nums) > 2 else None,
-    )
+    )  # fmt: skip
+
+
+def prepare_background(data: bytes) -> bytes:
+    """Square 1080x1080 JPEG, so uploads stay small in the database."""
+    import io
+    from PIL import Image, ImageOps
+
+    img = ImageOps.exif_transpose(Image.open(io.BytesIO(data))).convert("RGB")
+    img = ImageOps.fit(img, (CARD_SIZE, CARD_SIZE), Image.LANCZOS)
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=90, optimize=True)
+    return buf.getvalue()
+
+
+def check_font(data: bytes):
+    """None if the font works and has Amharic letters, otherwise what is wrong."""
+    import io
+    from PIL import ImageFont
+
+    try:
+        font = ImageFont.truetype(io.BytesIO(data), 60)
+    except Exception:
+        return "I can't open that font file."
+    if not glyph_has(font, "አ"):
+        return "That font has no Amharic letters, so it can't be used."
+    return None
+
+
+async def save_card_upload(message, state: str) -> str:
+    """The owner sent a picture or a font while in the 'add' state. Returns the reply text."""
+    kind = "bg" if state == "card_add_bg" else "font"
+    doc = message.document
+    if kind == "bg":
+        if message.photo:
+            source, name = message.photo[-1], f"upload-{message.message_id}.jpg"
+        elif doc and (doc.mime_type or "").startswith("image/"):
+            source, name = doc, doc.file_name or f"upload-{message.message_id}.jpg"
+        else:
+            return "Send a picture (a photo, or as a file for the best quality)."
+    else:
+        if not doc or not (doc.file_name or "").lower().endswith(CARD_FONT_TYPES):
+            return "Send the font as a file ending in .ttf or .otf."
+        source, name = doc, doc.file_name
+    if (source.file_size or 0) > UPLOAD_MAX_BYTES:
+        return "That file is too big (the limit is 8 MB)."
+    if await db("fetchval", "SELECT count(*) FROM card_files") >= MAX_UPLOADS:
+        return f"You already have {MAX_UPLOADS} uploaded files. Delete some under 🗂 Uploaded files."
+    try:
+        data = bytes(await (await source.get_file()).download_as_bytearray())
+    except TelegramError:
+        return "I couldn't download that file. Please try again."
+    if kind == "bg":
+        try:
+            data = await asyncio.to_thread(prepare_background, data)
+        except Exception:
+            return "I can't read that picture."
+    else:
+        problem = await asyncio.to_thread(check_font, data)
+        if problem:
+            return problem
+    await db("execute", "INSERT INTO card_files (kind, name, data) VALUES ($1, $2, $3)", kind, name[:80], data)
+    return ("✅ Picture saved." if kind == "bg" else "✅ Font saved.") + " Send another one, or tap Done."
+
+
+async def handle_card_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Every adm:card... button. Registered BEFORE the general adm: handler."""
+    query = update.callback_query
+    uid = query.from_user.id
+    parts = query.data.split(":")
+    action = parts[1]
+    if not await is_admin(uid):
+        await query.answer(t(ADMIN_LANG, "admins_only"), show_alert=True)
+        return
+    if action in ("cardtoggle", "cardaddbg", "cardaddfont", "cardfiles", "cardrm", "cardlook") and not is_owner(uid):
+        await query.answer(t(ADMIN_LANG, "owner_only"), show_alert=True)
+        return
+    await query.answer()
+    await get_user(query.from_user)
+
+    if action == "card":
+        await set_state(uid, None)
+        text, markup = await card_menu(uid)
+        await show(query, text, markup)
+    elif action == "cardnew":  # from a photo/album message: keep it, send the menu as a new message
+        if await drop_buttons(query):
+            text, markup = await card_menu(uid)
+            await context.bot.send_message(chat_id=uid, text=text, reply_markup=markup)
+    elif action == "cardtoggle":
+        await set_card_enabled(not await card_enabled())
+        text, markup = await card_menu(uid)
+        await show(query, text, markup)
+    elif action == "cardtest":
+        await send_test_card(context.bot, uid, randomize=True)
+    elif action == "cardagain":
+        if await drop_buttons(query):
+            await send_test_card(context.bot, uid, randomize=True)
+    elif action == "cardprev":
+        await send_preview(context.bot, uid, day_number(1))
+    elif action == "cardlook":  # a new random look for that day's post
+        if await drop_buttons(query):
+            day = int(parts[2])
+            await set_override(day, random.randrange(10_000), random.randrange(10_000), random.randrange(len(DESIGNS)))
+            await send_preview(context.bot, uid, day)
+    elif action in ("cardaddbg", "cardaddfont"):
+        await set_state(uid, "card_add_bg" if action == "cardaddbg" else "card_add_font")
+        what = (
+            "a picture (any size, it is cropped square; send it as a file for the best quality)"
+            if action == "cardaddbg"
+            else "a font as a file (.ttf or .otf). It must have Amharic letters"
+        )
+        await show(
+            query,
+            f"➕ Send me {what}.\n\nOne at a time. You can keep sending more, then tap Done.",
+            kb([btn("✅ Done", "adm:card")]),
+        )
+    elif action in ("cardfiles", "cardrm"):
+        if action == "cardrm":
+            await db("execute", "DELETE FROM card_files WHERE id = $1", int(parts[2]))
+        rows = await db("fetch", "SELECT id, kind, name FROM card_files ORDER BY id DESC LIMIT 30")
+        buttons = [
+            [btn(f"🗑 {'🖼' if r['kind'] == 'bg' else '🔤'} {r['name'][:30]}", f"adm:cardrm:{r['id']}")] for r in rows
+        ]
+        text = "🗂 Files uploaded in the bot (newest first). Tap one to delete it." if rows else "No files uploaded in the bot yet."
+        await show(query, text, InlineKeyboardMarkup(buttons + [[btn(t(ADMIN_LANG, "b_back"), "adm:card")]]))
+
+
 # --- end verse card ---
 
 
@@ -3282,22 +3766,18 @@ async def is_channel_member(bot, user_id: int) -> bool:
     )
 
 
-async def post_daily_verse_to_channel(bot, card=None) -> bool:
-    """Post today's verse in the channel: as the picture when there is one, otherwise
-    as text (English and Amharic). True if it worked."""
+async def post_daily_verse_to_channel(bot, verse: dict, card=None) -> bool:
+    """Post today's verse in the channel: the picture WITH the verse as its caption when there
+    is a card, otherwise plain text. Either way: good morning, the verse, and the prayer-request button."""
     if not CHANNEL_CHAT:
         return False
-    verse = todays_verse()
-    en, am = verse_block("en", verse), verse_block("am", verse)
-    text = "🌅 Good morning · እንደምን አደሩ!\n\n" + en
-    if am != en:
-        text += "\n\n" + am
+    text = verse_caption(verse)
     markup = None
     if bot.username:
         markup = kb([InlineKeyboardButton("🙏 Send a prayer request", url=f"https://t.me/{bot.username}")])
     if card:
         try:
-            await send_card(bot, CHANNEL_CHAT, card, "🌅 እንደምን አደሩ!", markup)
+            await send_card(bot, CHANNEL_CHAT, card, text, markup)
             return True
         except TelegramError as e:
             logging.warning("Verse card could not be posted, sending the text verse instead: %s", e)
@@ -3316,15 +3796,16 @@ async def send_daily_reminder(context: ContextTypes.DEFAULT_TYPE):
     await purge_expired_admins()
     # Channel posts keep the sender's ID only for a short time.
     await db("execute", "DELETE FROM channel_posts WHERE created_at < now() - interval '30 days'")
+    day = day_number()
+    verse = verse_for_day(day)
     # The picture is used only when the owner switched the verse card on and it can be made.
     card = None
     if await card_enabled():
         try:
-            png = (await asyncio.to_thread(build_card, todays_verse(), None, None, card_watermark(context.bot)))[0]
-            card = {"png": png, "file_id": None}
+            card = await make_card(context.bot, day)
         except Exception as e:
             logging.warning("Verse card not used today, sending text verses: %s", e)
-    channel_ok = await post_daily_verse_to_channel(context.bot, card)
+    channel_ok = await post_daily_verse_to_channel(context.bot, verse, card)
     rows = await db(
         "fetch",
         # Only people who finished choosing a language (reminders are on by default).
@@ -3336,17 +3817,14 @@ async def send_daily_reminder(context: ContextTypes.DEFAULT_TYPE):
         if channel_ok and await is_channel_member(context.bot, row["user_id"]):
             await asyncio.sleep(0.03)
             continue  # they read it in the channel
+        # Good morning + the verse (in their language), with a prayer-request button and the menu.
+        text = t(lang, "reminder", verse=verse_block(lang, verse))
+        markup = kb([btn(t(lang, "b_send"), "m:requestnew")], menu_row_new(lang))
         try:
             if card and lang == "am":
-                await send_card(
-                    context.bot, row["user_id"], card, t(lang, "reminder_card"), kb(menu_row_new(lang))
-                )
+                await send_card(context.bot, row["user_id"], card, text, markup)
             else:
-                await context.bot.send_message(
-                    chat_id=row["user_id"],
-                    text=t(lang, "reminder", verse=daily_verse(lang)),
-                    reply_markup=kb(menu_row_new(lang)),
-                )
+                await context.bot.send_message(chat_id=row["user_id"], text=text, reply_markup=markup)
         except Forbidden:
             await db("execute", "UPDATE users SET subscribed = FALSE WHERE user_id = $1", row["user_id"])
         except TelegramError as e:
@@ -3469,6 +3947,7 @@ def build_application():
         ("addadmin", handle_addadmin_command),
         ("removeadmin", handle_removeadmin_command),
         ("testcard", handle_testcard_command),
+        ("preview", handle_preview_command),
     ):
         application.add_handler(CommandHandler(name, handler, filters=private))
 
@@ -3483,6 +3962,7 @@ def build_application():
         (r"^cancel$", handle_cancel_send),
         (r"^js$", handle_save_request),
         (r"^j:", handle_journal),
+        (r"^adm:card", handle_card_callback),  # must come before the general adm: handler
         (r"^adm:", handle_admin),
         (r"^bc:", handle_broadcast),
         (r"^chp:", handle_channel_post),
@@ -3502,6 +3982,7 @@ def build_application():
     if jobs is None:
         raise RuntimeError("Install python-telegram-bot[job-queue] for the reminders.")
     jobs.run_daily(send_daily_reminder, time=DAILY_TIME_UTC, name="daily_verse")
+    jobs.run_daily(send_tomorrow_preview, time=PREVIEW_TIME_UTC, name="tomorrow_preview")
     jobs.run_daily(send_weekly_reflection, time=WEEKLY_TIME_UTC, days=(0,), name="weekly_reflection")
     jobs.run_repeating(check_journal_reminders, interval=600, first=60, name="journal_reminders")
     return application
