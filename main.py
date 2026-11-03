@@ -347,6 +347,8 @@ TEXTS = {
         "b_join_channel": "📢 Join Anonymous Prayer Channel",
         "reminder_card": "🌅 Good morning! Take a moment to pray today.",
         "b_card": "🖼 Verse card",
+        "b_verse_pic": "🖼 Verse picture",
+        "pic_unavailable": "Sorry, the picture isn't available right now.",
         # ---- admin panel ----
         "adm_panel": "🔧 Admin panel\n\nYou are: {role}",
         "role_owner": "Owner (full control)",
@@ -572,6 +574,8 @@ TEXTS = {
         ),
         "b_join_channel": "📢 Anonymous Prayer ቻናልን ተቀላቀሉ",
         "reminder_card": "🌅 እንደምን አደሩ! ዛሬ ለጸሎት ጥቂት ጊዜ ይውሰዱ።",
+        "b_verse_pic": "🖼 ጥቅሱን በምስል",
+        "pic_unavailable": "ይቅርታ፣ ምስሉ አሁን አይገኝም።",
         # ---- admin invitation (the admin panel itself is English only) ----
         "admin_now": (
             "🔧 አሁን የዚህ ቦት አስተዳዳሪ ሆነዋል። 🏠 ዋና ማውጫ → 🔧 አስተዳዳሪ ይክፈቱ። "
@@ -1217,16 +1221,63 @@ async def handle_feeling(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # so one tap can never send two verses.
         if not await drop_buttons(query):
             return
-    text = f"{FEELING_LABELS[lang][feeling]}\n\n{verse_block(lang, random.choice(FEELING_REFS[feeling]))}"
+    verse = random.choice(FEELING_REFS[feeling])
+    text = f"{FEELING_LABELS[lang][feeling]}\n\n{verse_block(lang, verse)}"
     await context.bot.send_message(
         chat_id=query.from_user.id,
         text=text,
-        reply_markup=kb(
-            [btn(t(lang, "b_another"), f"more:{feeling}")],
-            [btn(t(lang, "b_feelings"), "m:scripture2")],
-            menu_row_new(lang),
-        ),
+        reply_markup=verse_keyboard(lang, feeling, VERSES.index(verse)),
     )
+
+
+def verse_keyboard(lang: str, feeling: str, verse_index: int, with_pic: bool = True) -> InlineKeyboardMarkup:
+    """Buttons under a verse from 'Scripture for me'."""
+    rows = [[btn(t(lang, "b_another"), f"more:{feeling}")]]
+    if with_pic:
+        rows.append([btn(t(lang, "b_verse_pic"), f"vpic:{verse_index}:{feeling}")])
+    rows += [[btn(t(lang, "b_feelings"), "m:scripture2")], menu_row_new(lang)]
+    return InlineKeyboardMarkup(rows)
+
+
+async def handle_verse_pic(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """'Verse picture' under a verse: the same verse drawn on a picture (random picture, font, design)."""
+    query = update.callback_query
+    try:
+        _, index, feeling = query.data.split(":")
+        verse_index = int(index)
+        verse = VERSES[verse_index]
+    except (ValueError, IndexError):
+        await query.answer()
+        return
+    if feeling not in FEELING_REFS:
+        feeling = FEELINGS[0]
+    user = await get_user(query.from_user)
+    lang = user["lang"] or "en"
+    backgrounds, fonts = await card_assets()
+    if not backgrounds or not fonts:
+        await query.answer(t(lang, "pic_unavailable"), show_alert=True)
+        return
+    await query.answer()
+    # Take the picture button off first, so a double tap can't send two pictures.
+    try:
+        await query.edit_message_reply_markup(reply_markup=verse_keyboard(lang, feeling, verse_index, with_pic=False))
+    except TelegramError:
+        return
+    caption = verse_block(lang, verse)
+    try:
+        png = await asyncio.to_thread(
+            render_verse_card, verse, random.choice(backgrounds), random.choice(fonts),
+            card_latin_font(), random.randrange(len(DESIGNS)), card_watermark(context.bot), lang,
+        )
+        await context.bot.send_photo(
+            chat_id=query.from_user.id,
+            photo=png,
+            caption=caption if len(caption) <= CAPTION_LIMIT else None,
+            reply_markup=kb(menu_row_new(lang)),
+        )
+    except Exception:
+        logging.exception("Could not make the verse picture")
+        await context.bot.send_message(chat_id=query.from_user.id, text=t(lang, "pic_unavailable"))
 
 
 # ---------------------------------------------------------------------------
@@ -3197,8 +3248,30 @@ def _glass(img, box, radius, blur=26, darken=0.30, tint=0.10, border=170):
     _paste_layer(img, layer)
 
 
+def _telegram_icon(px: int):
+    """A small Telegram-style logo (blue circle, white paper plane), drawn with shapes."""
+    from PIL import Image, ImageDraw
+
+    k = 4  # draw big, then shrink, for smooth edges
+    big = px * k
+    icon = Image.new("RGBA", (big, big), (0, 0, 0, 0))
+    d = ImageDraw.Draw(icon)
+    sc = big / 100
+
+    def pts(*xy):
+        return [(x * sc, y * sc) for x, y in xy]
+
+    d.ellipse([0, 0, big - 1, big - 1], fill=(42, 171, 238, 255))
+    d.polygon(pts((21, 48), (77, 26), (65, 74), (47, 58)), fill=(255, 255, 255, 255))
+    d.polygon(pts((47, 58), (40, 69), (38, 55)), fill=(255, 255, 255, 255))
+    d.polygon(pts((77, 26), (47, 58), (40, 69), (52, 61)), fill=(205, 222, 236, 255))
+    icon = icon.resize((px, px), Image.LANCZOS)
+    icon.putalpha(icon.getchannel("A").point(lambda a: int(a * 0.95)))
+    return icon
+
+
 def _footer(img, ink, handle, top, align="m", x=None):
-    """The bot's @username and its t.me link (two small lines)."""
+    """The Telegram icon followed by the bot's @username, on one line."""
     if not handle:
         return
     from PIL import Image, ImageDraw
@@ -3206,8 +3279,12 @@ def _footer(img, ink, handle, top, align="m", x=None):
     layer = Image.new("RGBA", img.size, (0, 0, 0, 0))
     d = ImageDraw.Draw(layer)
     x = img.width / 2 if x is None else x
-    draw_line(d, ink, handle, 32, x, top, align, (255, 255, 255, 235), 2, (10, 12, 24, 150), latin=True)
-    draw_line(d, ink, "t.me/" + handle.lstrip("@"), 25, x, top + 40, align, (214, 226, 240, 205), 2, (10, 12, 24, 150), latin=True)
+    size, icon_px, gap = 32, 42, 14
+    width = icon_px + gap + text_width(d, ink, handle, size, latin=True)
+    left = x - width / 2 if align == "m" else x - width if align == "r" else x
+    asc, desc = ink.font(size, True).getmetrics()
+    layer.alpha_composite(_telegram_icon(icon_px), dest=(round(left), round(top + (asc + desc - icon_px) / 2)))
+    draw_line(d, ink, handle, size, left + icon_px + gap, top, "l", (255, 255, 255, 240), 2, (10, 12, 24, 150), latin=True)
     _paste_layer(img, layer)
 
 
@@ -3237,7 +3314,7 @@ def _design_glass(img, c, ink):
         draw_line(d, ink, line, size, S / 2, y, "m", (242, 246, 252))
         y += line_h
     draw_line(d, ink, c["ref"], ref_px, S / 2, y + 34, "m", (196, 212, 232))
-    _footer(img, ink, c["handle"], S - 128)
+    _footer(img, ink, c["handle"], S - 112)
     return img
 
 
@@ -3250,7 +3327,7 @@ def _design_sheet(img, c, ink):
     d = ImageDraw.Draw(img)
     title_h = round(ink.height(title_px) * 1.2) + 14 if c["title"] else 0
     ref_h = round(ink.height(ref_px) * 1.2)
-    fixed = (pad - 10) + 28 + title_h + 26 + ref_h + 22 + 1 + 18 + 76 + 32
+    fixed = (pad - 10) + 28 + title_h + 26 + ref_h + 22 + 1 + 18 + 46 + 32
     size, _, lines, line_h = fit_paragraph(d, ink, c["text"], S - 2 * margin - 2 * pad, 790 - fixed, start=58, minimum=30)
     box_h = fixed + len(lines) * line_h
     x0, y0, x1, y1 = margin, S - margin - box_h, S - margin, S - margin
@@ -3295,7 +3372,7 @@ def _design_poster(img, c, ink):
     d.line([(S / 2 + 26, oy), (S / 2 + 190, oy)], fill=GOLD, width=3)
     d.polygon([(S / 2, oy - 11), (S / 2 + 11, oy), (S / 2, oy + 11), (S / 2 - 11, oy)], fill=GOLD)
     draw_line(d, ink, c["ref"], ref_px, S / 2, oy + 30, "m", (255, 255, 255), 3, (15, 15, 25))
-    _footer(img, ink, c["handle"], S - 130)
+    _footer(img, ink, c["handle"], S - 112)
     return img
 
 
@@ -3324,7 +3401,7 @@ def _design_bar(img, c, ink):
         draw_line(d, ink, line, size, left, y, "l", (255, 255, 255), 2, (10, 12, 24))
         y += line_h
     draw_line(d, ink, "\u2014 " + c["ref"], ref_px, left, y + 30, "l", (225, 232, 242), 2, (10, 12, 24))
-    _footer(img, ink, c["handle"], S - 130, "l", left - 40)
+    _footer(img, ink, c["handle"], S - 112, "l", left - 40)
     return img
 
 
@@ -3367,7 +3444,7 @@ def _design_frame(img, c, ink):
     pw = text_width(d, ink, c["ref"], ref_px) + 72
     d.rounded_rectangle([S / 2 - pw / 2, y, S / 2 + pw / 2, y + pill_h], radius=pill_h / 2, outline=GOLD, width=2)
     draw_line(d, ink, c["ref"], ref_px, S / 2, y + 11, "m", (235, 240, 248))
-    _footer(img, ink, c["handle"], S - 168)
+    _footer(img, ink, c["handle"], S - 150)
     return img
 
 
@@ -3380,19 +3457,23 @@ DESIGNS = [
 ]
 
 
-def render_verse_card(verse, background, main_font, latin_font, design, handle=None) -> bytes:
-    """Draw one card (JPEG bytes). background / main_font / latin_font are CardFile items."""
+def render_verse_card(verse, background, main_font, latin_font, design, handle=None, lang="am") -> bytes:
+    """Draw one card (JPEG bytes). background / main_font / latin_font are CardFile items.
+    lang "am" writes the Amharic verse (when it has one); "en" writes the English verse."""
     import io
     from PIL import Image, ImageOps
 
     S = CARD_SIZE
     img = ImageOps.fit(ImageOps.exif_transpose(background.image()).convert("RGB"), (S, S), Image.LANCZOS)
+    amharic = lang == "am" and bool(verse["am"])
     c = {
-        "text": verse["am"],
-        "ref": verse["ref_am"] or verse["ref"],
-        "title": verse.get("title_am", ""),
+        "text": verse["am"] if amharic else verse["en"],
+        "ref": (verse["ref_am"] or verse["ref"]) if amharic else verse["ref"],
+        "title": verse.get("title_am", "") if amharic else "",
         "handle": handle,
     }
+    if not amharic and latin_font:
+        main_font = latin_font  # English letters: the Latin font (the Amharic font may lack them)
     img = DESIGNS[design % len(DESIGNS)][1](img, c, Ink(main_font, latin_font))
     buf = io.BytesIO()
     img.save(buf, format="JPEG", quality=93, optimize=True)
@@ -3955,6 +4036,7 @@ def build_application():
         (r"^lang:", handle_lang_choice),
         (r"^m:", handle_menu),
         (r"^(feel|more):", handle_feeling),
+        (r"^vpic:", handle_verse_pic),
         (r"^r:", handle_reminder_toggle),
         (r"^cat:", handle_category),
         (r"^send:", handle_send),
