@@ -1076,7 +1076,10 @@ async def deliver(
             head = await context.bot.send_message(
                 chat_id=recipient_id,
                 text=header,
-                reply_markup=kb([btn(t(lang, "b_block_sender"), f"blk:{code}")]),
+                # Only the owner can block a sender (other admins get no button).
+                reply_markup=(
+                    kb([btn(t(lang, "b_block_sender"), f"blk:{code}")]) if recipient_id == OWNER_ID else None
+                ),
                 protect_content=True,
             )
             for mid in message_ids:
@@ -1709,7 +1712,7 @@ async def handle_state_message(update: Update, context: ContextTypes.DEFAULT_TYP
         await set_state(uid, None)
         await message.reply_text(await add_admin(uid, message.text, ADMIN_LANG))
 
-    elif state == "admin_block" and await is_admin(uid):
+    elif state == "admin_block" and is_owner(uid):
         await set_state(uid, None)
         _, text = await set_blocked_by_code(message.text, True, ADMIN_LANG)
         await message.reply_text(text)
@@ -2634,14 +2637,10 @@ def can_quit_admin(uid: int) -> bool:
 
 
 def admin_home(uid: int, lang: str):
-    first = []
+    rows = []
     if is_owner(uid):
-        first.append(btn(t(lang, "b_stats"), "adm:stats"))  # stats: owner only
-    first.append(btn(t(lang, "b_blocked"), "adm:blocked"))
-    second = [btn(t(lang, "b_block_code"), "adm:block")]
-    rows = [first, second]
-    if is_owner(uid):
-        second.append(btn(t(lang, "b_admins"), "adm:admins"))
+        rows.append([btn(t(lang, "b_stats"), "adm:stats"), btn(t(lang, "b_blocked"), "adm:blocked")])
+        rows.append([btn(t(lang, "b_block_code"), "adm:block"), btn(t(lang, "b_admins"), "adm:admins")])
         rows.append([btn(t(lang, "b_broadcast"), "adm:bc")])
     elif can_quit_admin(uid):
         rows.append([btn(t(lang, "b_quit"), "adm:quit")])
@@ -2743,6 +2742,8 @@ async def handle_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # (The verse card buttons, adm:card..., are handled by handle_card_callback.)
 
     elif action == "blocked":
+        if not await owner_only():
+            return
         await render_blocked(query, uid, lang)
 
     elif action == "unb":
@@ -2752,6 +2753,8 @@ async def handle_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await render_blocked(query, uid, lang)
 
     elif action == "block":
+        if not await owner_only():
+            return
         await set_state(uid, "admin_block")
         await show(query, t(lang, "block_prompt"), cancel_home)
 
@@ -2842,8 +2845,8 @@ async def handle_block_button(update: Update, context: ContextTypes.DEFAULT_TYPE
     """'🚫 Block sender' under a request header."""
     query = update.callback_query
     uid = query.from_user.id
-    if not await is_admin(uid):
-        await query.answer(t(ADMIN_LANG, "admins_only"), show_alert=True)
+    if not is_owner(uid):
+        await query.answer(t(ADMIN_LANG, "owner_only"), show_alert=True)
         return
     done, text = await set_blocked_by_code(query.data.split(":", 1)[1], True, ADMIN_LANG)
     await query.answer(text, show_alert=True)
@@ -2964,7 +2967,7 @@ async def handle_stats_command(update: Update, context: ContextTypes.DEFAULT_TYP
 
 
 async def handle_block_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if await _admin_command_guard(update, False):
+    if await _admin_command_guard(update, True):  # blocking: owner only
         lang = ADMIN_LANG
         if not context.args:
             await update.message.reply_text(t(lang, "usage_block"))
