@@ -260,6 +260,7 @@ TEXTS = {
         ),
         # prayer request header (what the prayer team sees)
         "req_header": "🙏 New prayer request · #{code}\n📂 {category}\n🕒 {time}",
+        "req_header_plain": "🙏 New prayer request\n📂 {category}\n🕒 {time}",
         "b_block_sender": "🚫 Block sender",
         # buttons
         "b_send": "🙏 Send a prayer request",
@@ -512,6 +513,7 @@ TEXTS = {
             "• ወደ ቀጣዩ ሳምንት ምን ይዘው ይሄዳሉ?\n\n{verse}"
         ),
         "req_header": "🙏 አዲስ የጸሎት ጥያቄ · #{code}\n📂 {category}\n🕒 {time}",
+        "req_header_plain": "🙏 አዲስ የጸሎት ጥያቄ\n📂 {category}\n🕒 {time}",
         "b_block_sender": "🚫 ላኪውን አግድ",
         "b_send": "🙏 የጸሎት ጥያቄ ላክ",
         "b_scripture": "📖 ጥቅስ ለእኔ",
@@ -1065,9 +1067,10 @@ async def deliver(
     delivered = 0
     for recipient_id in ids:
         lang = langs.get(recipient_id) or "en"
+        # Only the owner sees the sender code; other admins get the request without it.
         header = t(
             lang,
-            "req_header",
+            "req_header" if recipient_id == OWNER_ID else "req_header_plain",
             code=code,
             category=CATEGORY_LABELS[lang][category],
             time=format_time(now, lang),
